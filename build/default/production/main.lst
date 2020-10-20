@@ -1,0 +1,3036 @@
+MPASM  5.43                          MAIN.ASM   5-8-2020  18:39:39         PAGE  1
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+
+                      00001 ;*********************************************************
+                      00002 ;*  TAPE DRIVE EMULATOR FOR FPGA IMPLEMENTATION OF THE   *
+                      00003 ;*  TRS80 MODEL MC-10 COMPUTER. DESIGNED FOR PIC16F747.  *
+                      00004 ;*  ALL CODE WRITTEN BY STEVE L00SER-ROJAS               *
+                      00005 ;*  SYSTEM CLOCK SHOULD BE 4 MHz.                        *
+                      00006 ;*********************************************************
+                      00007 
+                      00008     LIST P=PIC16F747
+                      00009     #INCLUDE <p16f747.inc>
+                      00001         LIST
+                      00002 
+                      00003 ;==========================================================================
+                      00004 ;  MPASM PIC16F747 processor include
+                      00005 ; 
+                      00006 ;  (c) Copyright 1999-2011 Microchip Technology, All rights reserved
+                      00007 ;==========================================================================
+                      00008 
+                      00668         LIST
+2007   3F23           00010     __CONFIG    _CONFIG1, _CP_OFF & _CCP2_RC1 & _DEBUG_OFF & _VBOR_2_7 & _BOREN_0 & _MCLR_ON & _PWRTE_ON
+                             & _WDT_OFF & _EXTCLK
+2008   3FBC           00011     __CONFIG    _CONFIG2, _BORSEN_0 & _IESO_OFF & _FCMEN_OFF
+                      00012     ORG 0x000
+                      00013 
+                      00014 ;PIN USAGE:
+                      00015 ; PORTA,0 TXD (SOFTWARE UART) OUTPUT
+                      00016 ; PORTA,1 RXD (SOFTWARE UART) INPUT
+                      00017 ; PORTA,2 DISPLAY CE OUTPUT
+                      00018 ; PORTA,3 DISPLAY RS OUTPUT
+                      00019 ; PORTA,4 UNUSED (OPEN DRAIN) OUTPUT
+                      00020 ; PORTA,5 UNUSED OUTPUT
+                      00021 ; PORTA,6 CH376S CE OUTPUT
+                      00022 ; PORTA,7 CH376S RESET OUTPUT
+                      00023 ; PORTB,0 CH376S INTERRUPT INPUT
+                      00024 ; PORTB,1 TAPE INPUT
+                      00025 ; PORTB,2 TAPE OUTPUT
+                      00026 ; PORTB,3 BUTTON 1 INPUT
+                      00027 ; PORTB,4 BUTTON 2 INPUT
+                      00028 ; PORTB,5 BUTTON 3 INPUT
+                      00029 ; PORTB,6 BUTTON 4 INPUT    ICSP CLOCK
+                      00030 ; PORTB,7 RAM CE OUTPUT     ICSP DATA
+                      00031 ; PORTC,3 SCK (HARDWARE SPI) OUTPUT
+                      00032 ; PORTC,4 SDI (HARDWARE SPI) INPUT
+                      00033 ; PORTC,5 SDO (HARDWARE SPI) OUTPUT
+                      00034 ; PORTC,6 TXD (HARDWARE UART) INPUT (MUST BE CONFIGURED AS INPUT FOR UART MODULE TO WORK. THIS IS ACTUAL
+                            LY AN OUTPUT)
+                      00035 ; PORTC,7 RXD (HARDWARE UART) INPUT
+                      00036 ; PORTD,0 UNUSED INPUT
+                      00037 ; PORTD,1 UNUSED INPUT
+                      00038 ; PORTD,2 UNUSED INPUT
+                      00039 ; PORTD,3 UNUSED INPUT
+                      00040 ; PORTD,4 TEST OUTPUT
+                      00041 ; PORTD,5 UNUSED INPUT
+                      00042 ; PORTD,6 DISPLAY CLOCK OUTPUT
+MPASM  5.43                          MAIN.ASM   5-8-2020  18:39:39         PAGE  2
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+
+                      00043 ; PORTD,7 DISPLAY DATA OUTPUT
+                      00044 
+                      00045 ;REGISTER USAGE:
+                      00046 VARS    udata
+0000                  00047 DREG res 1          ;USED TO STORE RECEIVED DATA, KB_SEND, KB_READ
+0001                  00048 TEMP1 RES 1         ;USED FOR TEMPORARY STORAGE
+0002                  00049 TEMP2 RES 1
+0003                  00050 TEMP3 RES 1         ;TEMPORARY VARIABLE FOR USE IN USER INTERFACE FUNCTIONS
+0004                  00051 TEMP4 RES 1         ;USED TO STORE THE W REGISTER IN INTERRUPT HANDLERS
+0005                  00052 PULSE_LENGTH RES 1  ;LENGTH OF THE TAPE PULSE
+0006                  00053 RAM_ADDRESS_H RES 1 ;HIGH BYTE OF RAM ADDRESS
+0007                  00054 RAM_ADDRESS_L RES 1 ;LOW BYTE OF RAM ADDRESS
+0008                  00055 SDEL_COUNT RES 1    ;USED FOR SHORTDELAY
+0009                  00056 LDEL_COUNT RES 1    ;USED FOR LONGDELAY_LCD
+000A                  00057 GEN_COUNT RES 1     ;USED FOR FULLDELAY_232, HALFDELAY_232, TXDELAY_232
+000B                  00058 GEN_COUNT2 RES 1    ;SECOND COUNTER FOR NESTED LOOPS
+000C                  00059 GEN_COUNT3 RES 1    ;COUNTER FOR USE IN USER INTERFACE FUNCTIONS
+000D                  00060 GEN_COUNT4 RES 1    ;FOR USE IN USB AND BUILD_WORD SUBROUTINES
+000E                  00061 GEN_COUNT5 RES 1    ;FOR USB FUNCTIONS THAT CALL BUILD_WORD
+000F                  00062 GEN_COUNT6 RES 1    ;FOR USB FUNCTIONS
+0010                  00063 TAPE_NAME RES 8     ;USED TO STORE THE NAME OF THE PROGRAM WHEN THE NAME BLOCK IS PARSED
+0018                  00064 TAPE_SIZE_HIGH RES 1    ;HIGH BYTE OF TAPE SIZE
+0019                  00065 TAPE_SIZE_LOW RES 1     ;LOW BYTE OF TAPE SIZE
+001A                  00066 BIT_COUNT RES 1     ;KEEPS TRACK OF CURRENT BIT FOR TAPE OUT
+001B                  00067 HEX_CHAR_HIGH RES 1 ;FOR BYTE TO HEX CONVERSION
+001C                  00068 HEX_CHAR_LOW RES 1
+001D                  00069 USB_BYTES_SENT_HIGH RES 1
+001E                  00070 USB_BYTES_SENT_LOW RES 1
+001F                  00071 USB_FILE_SIZE_HIGH RES 1
+0020                  00072 USB_FILE_SIZE_LOW RES 1
+0021                  00073 USB_BYTES_READ_HIGH RES 1
+0022                  00074 USB_BYTES_READ_LOW RES 1
+                      00075 ;USB_DRIVE_SIZE0 RES 1  ;THE DRIVE SIZE IS GIVEN IN MULTIPLES OF 512, SO THE LSB IS ALWAYS 0
+0023                  00076 USB_DRIVE_SIZE1 RES 1
+0024                  00077 USB_DRIVE_SIZE2 RES 1
+0025                  00078 USB_DRIVE_SIZE3 RES 1   ;MSB OF DRIVE SIZE
+                      00079 ;USB_FREE_SPACE0 RES 1  ;FREE SPACE IS GIVEN IN MULTIPLES OF 512, SO THE LSB IS ALWAYS 0
+0026                  00080 USB_FREE_SPACE1 RES 1
+0027                  00081 USB_FREE_SPACE2 RES 1
+0028                  00082 USB_FREE_SPACE3 RES 1   ;MSB OF FREE SPCAE
+                      00083 ;USB_LOGICAL_BYTES0 RES 1   ;LOGICAL BYTES ARE SPECIFIED IN MULTIPLES OF 512, SO THE LSB IS ALWAYS 0
+0029                  00084 USB_LOGICAL_BYTES1 RES 1
+002A                  00085 USB_LOGICAL_BYTES2 RES 1
+002B                  00086 USB_LOGICAL_BYTES3 RES 1    ;MSB OF LOGICAL BYTES
+002C                  00087 USB_TARGET_STATUS RES 1 ;WAIT_STATUS WILL WAIT FOR THIS STATUS
+002D                  00088 S_REG_HIGH RES 1    ;HIGH BYTE OF RANDOM WORD
+002E                  00089 S_REG_LOW RES 1 ;LOW BYTE OF RANDOM WORD
+002F                  00090 TIMEOUT_LOW RES 1 ;LSB OF TIMEOUT IN MILLISECONDS
+0030                  00091 TIMEOUT_HIGH RES 1 ;MSB OF TIMEOUT IN MILLISECONDS
+0031                  00092 DELAY_COUNTER RES 1 ;FOR DELAY MILLIS
+0032                  00093 STRING_INDEX RES 1  ;OFFSET IN SELECTED STRING
+0033                  00094 STRING_ID   RES 1   ;SELECTS A STRING
+0034                  00095 FLAG_REG RES 1  ;BITS USED AS FLAGS FOR VARIOUS SUBROUTINES
+MPASM  5.43                          MAIN.ASM   5-8-2020  18:39:39         PAGE  3
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+
+                      00096 
+                      00097 BUFS1 UDATA
+0000                  00098 BUFFER_1 RES D'80'
+                      00099 
+                      00100 BUFS2 UDATA
+0000                  00101 BUFFER_2 RES D'96'
+                      00102 
+                      00103 BUFS3 UDATA
+0000                  00104 BUFFER_3 RES D'96'
+                      00105 
+                      00106 ;FLAG REG USAGE:
+                      00107 ;BIT0 SET IF S_REG_LOW CONTAINS VALID DATA
+                      00108 ;BIT1 SET IF BUILD_BYTE IS WAITING FOR THE FIRST BYTE OF A TRANSMISSION (PREVENTS RESET IF TRANSMISSION 
+                            FAILS)
+                      00109 ;BIT2 SET IF TIMEOUT OCCURED WHILE WAITING FOR USB STATUS
+                      00110 ;BIT3 SET IF FREE SPACE EXCEEDS TAPE SIZE
+                      00111 ;BIT4 SET IF FREE SPCAE EXCEEDS 0x20000
+                      00112 ;BIT5 UNUSED
+                      00113 ;BIT6 UNUSED
+                      00114 ;BIT7 UNUSED
+                      00115 
+                      00116 RST CODE 0X00   ;RESET VECTOR
+0000   ????           00117     PAGESEL INITIALIZE
+0001   2???           00118     GOTO INITIALIZE
+                      00119 INT CODE 0X04   ;INTERRUPT VECTOR
+                      00120     ;MOVWF TEMP4
+                      00121     ;BCF INTCON, T0IF
+                      00122     ;MOVLW B'00010000'
+                      00123     ;XORWF PORTD        ;TOGGLE TEST OUTPUT
+                      00124     ;MOVF TEMP4, W
+                      00125     ;RETFIE
+0004   2???           00126     GOTO TAPE_INT
+                      00127 
+                      00128 START CODE 0X05   ;START OF PROGRAM
+                      00129 
+0005                  00130 INITIALIZE
+0005   1283 1303      00131     BANKSEL PORTA
+0007   0185           00132     CLRF PORTA
+0008   0186           00133     CLRF PORTB
+0009   0187           00134     CLRF PORTC
+000A   0188           00135     CLRF PORTD
+000B   1608           00136     BSF PORTD,4
+000C   0985           00137     COMF PORTA, F
+000D   0986           00138     COMF PORTB, F
+000E   0987           00139     COMF PORTC, F
+000F   1683 1303      00140     BANKSEL TRISA  ;SWITCH TO BANK 1
+0011   3002           00141     MOVLW B'00000010'
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+0012   0085           00142     MOVWF TRISA ;CONFIGURE PORTA
+0013   307B           00143     MOVLW B'01111011'
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+0014   0086           00144     MOVWF TRISB ;CONFIGURE PORTB
+0015   30D7           00145     MOVLW B'11010111'
+MPASM  5.43                          MAIN.ASM   5-8-2020  18:39:39         PAGE  4
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+0016   0087           00146     MOVWF TRISC ;CONFIGURE PORTC
+0017   302F           00147     MOVLW B'00101111'
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+0018   0088           00148     MOVWF TRISD ;CONFIGURE PORTD
+0019   3000           00149     MOVLW B'00000000'       ;SMP=0, CKE=0, DA=0, P=0, S=0, RW=0, UA=0, BF=0
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+001A   0094           00150     MOVWF SSPSTAT ;CONFIGURE SPI
+001B   300F           00151     MOVLW B'00001111'       ;PCFG=1111
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+001C   009F           00152     MOVWF ADCON1 ;DISABLE ANALOG INPUTS
+001D   3026           00153     MOVLW B'00100110'   ;CSRC=0, TX9=0, TXEN=1, SYNC=0, UNIMPLEMENTED=0, BRGH=1, TRMT=1, TX9D=0
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+001E   0098           00154     MOVWF TXSTA ;CONFIGURE UART
+001F   3019           00155     MOVLW D'25'
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+0020   0099           00156     MOVWF SPBRG ;CONFIGURE BAUD RATE
+0021   30D8           00157     MOVLW B'11011000'   ;RBPU = 1, INTEDG = 1, T0CS = 0, T0SE = 1, PSA = 1, PS2 = 0, PS1 = 0, PS0 = 0
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+0022   0081           00158     MOVWF OPTION_REG    ;CONFIGURE TIMER
+0023   1283 1303      00159     BANKSEL SSPCON
+0025   3030           00160     MOVLW B'00110000'   ;WCOL=0, SSPOV=0, SSPEN=1, CKP=1, SSPM=0000
+0026   0094           00161     MOVWF SSPCON ;CONFIGURE SPI
+0027   3090           00162     MOVLW B'10010000'   ;SPEN=1, RX9=0,SREN=0, CREN=1, ADDEN=0, FERR=0, OERR=0, RX9D=0
+0028   0098           00163     MOVWF RCSTA ;CONFIGURE UART
+0029   3020           00164     MOVLW B'00100000'
+002A   008B           00165     MOVWF INTCON    ;ENABLE TIMER 0 INTERRUPT
+002B   01??           00166     CLRF FLAG_REG
+002C   01??           00167     CLRF S_REG_HIGH
+002D   01??           00168     CLRF S_REG_LOW
+002E   3064           00169     MOVLW D'100'
+002F   00??           00170     MOVWF DELAY_COUNTER
+0030   2???           00171     CALL DELAY_MILLIS   ;100 MS DELAY AT STARTUP
+0031   2???           00172     CALL RAM_CONFIG
+0032   01??           00173     CLRF RAM_ADDRESS_H
+0033   01??           00174     CLRF RAM_ADDRESS_L
+0034   3055           00175     MOVLW H'55'
+0035   00??           00176     MOVWF DREG
+0036   2???           00177     CALL RAM_WRITE
+0037   2???           00178     CALL FUNCTIONSET_LCD    ;INITIALIZE DISPLAY
+0038   2???           00179     CALL DISPLAYON  ;POWER ON THE DISPLAY
+0039   2???           00180     CALL CLEARDISPLAY   ;CLEAR THE DISPLAY
+003A   2???           00181     CALL SETHOME_LCD    ;SET CURSOR TO THE START OF LINE 1
+003B   2???           00182     GOTO MAIN   ;DO THE THING
+                      00183 
+003C                  00184 MAIN
+003C   2???           00185     CALL UART_READ
+003D   2???           00186     CALL UART_SEND
+003E   08??           00187     MOVF DREG, W
+003F   00??           00188     MOVWF TEMP1 ;SAVE DATA
+0040   3AF1           00189     XORLW H'F1' ;IS F1?
+0041   1903           00190     BTFSC STATUS, Z ;CHECK ZERO FLAG
+0042   2???           00191     GOTO LISTEN     ;LISTEN TO TAPE AND PUT DATA IN MEMORY, THEN SEND DATA TO UART
+MPASM  5.43                          MAIN.ASM   5-8-2020  18:39:39         PAGE  5
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+
+0043   08??           00192     MOVF TEMP1, W
+0044   3AF2           00193     XORLW H'F2' ;IS F2?
+0045   1903           00194     BTFSC STATUS, Z ;CHECK ZERO FLAG
+0046   2???           00195     GOTO SEND_TAPE  ;GENERATE TAPE AUDIO FROM DATA IN MEMORY
+0047   08??           00196     MOVF TEMP1, W
+0048   3AF3           00197     XORLW H'F3' ;IS F3?
+0049   1903           00198     BTFSC STATUS, Z ;CHECK ZERO FLAG
+004A   2???           00199     GOTO CMD_SETHOME
+004B   08??           00200     MOVF TEMP1, W
+004C   3AF4           00201     XORLW H'F4' ;IS F4?
+004D   1903           00202     BTFSC STATUS, Z
+004E   2???           00203     GOTO CMD_LINE2
+004F   08??           00204     MOVF TEMP1, W
+0050   3AF5           00205     XORLW H'F5'
+0051   1903           00206     BTFSC STATUS, Z
+0052   2???           00207     GOTO CMD_LCD_CLEAR1
+0053   08??           00208     MOVF TEMP1, W
+0054   3AF6           00209     XORLW H'F6'
+0055   1903           00210     BTFSC STATUS, Z
+0056   2???           00211     GOTO CMD_LCD_CLEAR2
+0057   08??           00212     MOVF TEMP1, W
+0058   3AF7           00213     XORLW H'F7'
+0059   1903           00214     BTFSC STATUS, Z
+005A   2???           00215     GOTO CMD_CLEARDISPLAY
+005B   08??           00216     MOVF TEMP1, W
+005C   3AF8           00217     XORLW H'F8'
+005D   1903           00218     BTFSC STATUS, Z
+005E   2???           00219     GOTO CMD_PRINT_NAME
+005F   08??           00220     MOVF TEMP1, W
+0060   3AF9           00221     XORLW H'F9'
+0061   1903           00222     BTFSC STATUS, Z
+0062   2???           00223     GOTO CMD_MEM_DUMP
+0063   08??           00224     MOVF TEMP1, W
+0064   3AFA           00225     XORLW H'FA'
+0065   1903           00226     BTFSC STATUS, Z
+0066   2???           00227     GOTO CMD_PRINT_HOME
+0067   08??           00228     MOVF TEMP1, W
+0068   3AFB           00229     XORLW H'FB' ;IS COMMAND 0xFB?
+0069   1903           00230     BTFSC STATUS, Z
+006A   2???           00231     GOTO CMD_MEM_CLEAR
+006B   2???           00232     GOTO MAIN
+006C                  00233 LISTEN
+006C   2???           00234     CALL TAPE_IN
+006D   30FF           00235     MOVLW H'FF'
+006E   00??           00236     MOVWF RAM_ADDRESS_H
+006F   00??           00237     MOVWF RAM_ADDRESS_L
+0070   03??           00238     DECF TAPE_SIZE_LOW, F
+0071   0F??           00239     INCFSZ TAPE_SIZE_LOW, W
+0072   2???           00240     GOTO LISTEN2
+0073   03??           00241     DECF TAPE_SIZE_HIGH, F
+0074                  00242 LISTEN2
+0074   2???           00243     CALL RAM_READ_AUTO
+0075   2???           00244     CALL UART_SEND
+MPASM  5.43                          MAIN.ASM   5-8-2020  18:39:39         PAGE  6
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+
+0076   08??           00245     MOVF RAM_ADDRESS_H, W
+0077   06??           00246     XORWF TAPE_SIZE_HIGH, W
+0078   1D03           00247     BTFSS STATUS, Z
+0079   2???           00248     GOTO LISTEN2
+007A   08??           00249     MOVF RAM_ADDRESS_L, W
+007B   06??           00250     XORWF TAPE_SIZE_LOW, W
+007C   1D03           00251     BTFSS STATUS, Z
+007D   2???           00252     GOTO LISTEN2
+007E   0F??           00253     INCFSZ TAPE_SIZE_LOW, F    ;INCREMENT LOW ADDRESS
+007F   03??           00254     DECF TAPE_SIZE_HIGH, F
+0080   0A??           00255     INCF TAPE_SIZE_HIGH, F      ;IF LOW ADDRESS IS ZERO INCREMENT THE HIGH ADDRESS TOO
+0081   2???           00256     GOTO MAIN
+0082                  00257 SEND_TAPE
+0082   2???           00258     CALL TAPE_OUT
+0083   2???           00259     GOTO MAIN
+0084                  00260 CMD_SETHOME
+0084   2???           00261     CALL SETHOME_LCD
+0085   2???           00262     GOTO MAIN
+0086                  00263 CMD_LINE2
+0086   2???           00264     CALL LINE2_LCD
+0087   2???           00265     GOTO MAIN
+0088                  00266 CMD_LCD_CLEAR1
+0088   2???           00267     CALL LCD_CLEAR1
+0089   2???           00268     GOTO MAIN
+008A                  00269 CMD_LCD_CLEAR2
+008A   2???           00270     CALL LCD_CLEAR2
+008B   2???           00271     GOTO MAIN
+008C                  00272 CMD_CLEARDISPLAY
+008C   2???           00273     CALL CLEARDISPLAY
+008D   2???           00274     GOTO MAIN
+008E                  00275 CMD_PRINT_NAME
+008E   2???           00276     CALL PRINT_NAME
+008F   2???           00277     GOTO MAIN
+0090                  00278 CMD_MEM_DUMP
+0090   2???           00279     CALL MEM_DUMP
+0091   2???           00280     GOTO MAIN
+0092                  00281 CMD_PRINT_HOME
+0092   01??           00282     CLRF STRING_ID
+0093   2???           00283     CALL PRINT_STRING_LCD
+0094   2???           00284     GOTO MAIN
+0095                  00285 CMD_MEM_CLEAR
+0095   2???           00286     CALL MEM_CLEAR
+0096   2???           00287     GOTO MAIN
+                      00288 
+0097                  00289 MEM_CLEAR
+0097   01??           00290     CLRF RAM_ADDRESS_L
+0098   01??           00291     CLRF RAM_ADDRESS_H
+0099   09??           00292     COMF RAM_ADDRESS_L, F
+009A   09??           00293     COMF RAM_ADDRESS_H, F
+009B   01??           00294     CLRF DREG
+009C   09??           00295     COMF DREG, F
+009D                  00296 MEM_CLEAR_LOOP
+009D   1608           00297     BSF PORTD, 4
+MPASM  5.43                          MAIN.ASM   5-8-2020  18:39:39         PAGE  7
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+
+009E   2???           00298     CALL RAM_WRITE_AUTO
+009F   1208           00299     BCF PORTD, 4    ;PORTD 4 IS A DEBUG OUTPUT TO MEASURE THE DURATION OF RAM_WRITE
+00A0   08??           00300     MOVF RAM_ADDRESS_L, W
+00A1   3AFF           00301     XORLW H'FF'
+00A2   1D03           00302     BTFSS STATUS, Z
+00A3   2???           00303     GOTO MEM_CLEAR_LOOP
+00A4   08??           00304     MOVF RAM_ADDRESS_H, W
+00A5   3AFF           00305     XORLW H'FF'
+00A6   1D03           00306     BTFSS STATUS, Z
+00A7   2???           00307     GOTO MEM_CLEAR_LOOP
+00A8   0008           00308     RETURN
+                      00309 
+00A9                  00310 MEM_DUMP
+00A9   01??           00311     CLRF RAM_ADDRESS_L
+00AA   01??           00312     CLRF RAM_ADDRESS_H
+00AB   09??           00313     COMF RAM_ADDRESS_L, F
+00AC   09??           00314     COMF RAM_ADDRESS_H, F
+00AD                  00315 MEM_DUMP_LOOP
+00AD   2???           00316     CALL RAM_READ_AUTO
+00AE   2???           00317     CALL UART_SEND
+00AF   08??           00318     MOVF RAM_ADDRESS_L, W
+00B0   3AFF           00319     XORLW H'FF'
+00B1   1D03           00320     BTFSS STATUS, Z
+00B2   2???           00321     GOTO MEM_DUMP_LOOP
+00B3   08??           00322     MOVF RAM_ADDRESS_H, W
+00B4   3AFF           00323     XORLW H'FF'
+00B5   1D03           00324     BTFSS STATUS, Z
+00B6   2???           00325     GOTO MEM_DUMP_LOOP
+00B7   0008           00326     RETURN
+                      00327 
+00B8                  00328 UART_READ
+00B8   1E8C           00329     BTFSS PIR1,RCIF    ;CHECK IF UART RECEIVE BUFFER IS FULL
+00B9   2???           00330     GOTO UART_READ  ;IF NOT WAIT UNTIL ITS FULL
+00BA   081A           00331     MOVF RCREG, W   ;COPY DATA TO W
+00BB   00??           00332     MOVWF DREG      ;COPY DATA TO DREG
+00BC   0008           00333     RETURN
+                      00334 
+00BD                  00335 UART_SEND
+00BD   1E0C           00336     BTFSS PIR1,TXIF    ;CHECK IF UART TRANSMIT BUFFER IS EMPTY
+00BE   2???           00337     GOTO UART_SEND  ;IF NOT WAIT UNTIL IT IS
+00BF   08??           00338     MOVF DREG, W    ;COPY DATA TO W
+00C0   0099           00339     MOVWF TXREG     ;COPY DATA TO TXREG
+00C1   0008           00340     RETURN
+                      00341 
+00C2                  00342 RAM_READ_AUTO
+00C2   0F??           00343     INCFSZ RAM_ADDRESS_L, F    ;INCREMENT LOW ADDRESS
+00C3   03??           00344     DECF RAM_ADDRESS_H, F
+00C4   0A??           00345     INCF RAM_ADDRESS_H, F       ;IF LOW ADDRESS IS ZERO INCREMENT THE HIGH ADDRESS TOO
+00C5                  00346 RAM_READ
+00C5   1386           00347     BCF PORTB, 7    ;CHIP ENABLE
+00C6   3003           00348     MOVLW H'03' ;PUT WRITE COMMAND IN W
+00C7   0093           00349     MOVWF SSPBUF    ;SEND COMMAND
+00C8   08??           00350     MOVF RAM_ADDRESS_H, W   ;COPY ADDRESS TO W
+MPASM  5.43                          MAIN.ASM   5-8-2020  18:39:39         PAGE  8
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+
+00C9   1683 1303      00351     BANKSEL SSPSTAT
+00CB                  00352 RAM_WAIT_AH
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+00CB   1C14           00353     BTFSS SSPSTAT, BF   ;IS THE TRANSMISSION READY
+00CC   2???           00354     GOTO RAM_WAIT_AH    ;IF NOT WAIT UNTIL IT IS
+00CD   1283 1303      00355     BANKSEL SSPBUF
+00CF   0093           00356     MOVWF SSPBUF    ;SEND ADDRESS HIGH BYTE
+00D0   08??           00357     MOVF RAM_ADDRESS_L, W   ;COPY ADDRESS TO W
+00D1   1683 1303      00358     BANKSEL SSPSTAT
+00D3                  00359 RAM_WAIT_AL
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+00D3   1C14           00360     BTFSS SSPSTAT, BF
+00D4   2???           00361     GOTO RAM_WAIT_AL
+00D5   1283 1303      00362     BANKSEL SSPBUF
+00D7   0093           00363     MOVWF SSPBUF    ;SEND ADDRESS LOW BYTE
+00D8   1683 1303      00364     BANKSEL SSPSTAT
+00DA                  00365 RAM_WAIT_D
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+00DA   1C14           00366     BTFSS SSPSTAT, BF
+00DB   2???           00367     GOTO RAM_WAIT_D
+00DC   1283 1303      00368     BANKSEL SSPBUF
+00DE   0193           00369     CLRF SSPBUF
+00DF   1683 1303      00370     BANKSEL SSPSTAT
+00E1                  00371 RAM_WAIT_R
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+00E1   1C14           00372     BTFSS SSPSTAT, BF
+00E2   2???           00373     GOTO RAM_WAIT_R
+00E3   1283 1303      00374     BANKSEL SSPBUF
+00E5   0813           00375     MOVF SSPBUF, W  ;COPY DATA TO W
+00E6   00??           00376     MOVWF DREG  ;PUT DATA IN DREG
+00E7   1786           00377     BSF PORTB, 7
+00E8   0008           00378     RETURN
+                      00379 
+00E9                  00380 RAM_WRITE_AUTO
+00E9   0F??           00381     INCFSZ RAM_ADDRESS_L, F    ;INCREMENT LOW ADDRESS
+00EA   03??           00382     DECF RAM_ADDRESS_H, F
+00EB   0A??           00383     INCF RAM_ADDRESS_H, F       ;IF LOW ADDRESS IS ZERO INCREMENT THE HIGH ADDRESS TOO
+00EC                  00384 RAM_WRITE
+00EC   1386           00385     BCF PORTB, 7    ;CHIP ENABLE
+00ED   3002           00386     MOVLW H'02' ;PUT WRITE COMMAND IN W
+00EE   0093           00387     MOVWF SSPBUF    ;SEND COMMAND
+00EF   08??           00388     MOVF RAM_ADDRESS_H, W   ;COPY ADDRESS TO W
+00F0   1683 1303      00389     BANKSEL SSPSTAT
+00F2                  00390 RAM_WRITE_AH
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+00F2   1C14           00391     BTFSS SSPSTAT, BF   ;IS THE TRANSMISSION READY
+00F3   2???           00392     GOTO RAM_WRITE_AH   ;IF NOT WAIT UNTIL IT IS
+00F4   1283 1303      00393     BANKSEL SSPBUF
+00F6   0093           00394     MOVWF SSPBUF    ;SEND ADDRESS HIGH BYTE
+00F7   08??           00395     MOVF RAM_ADDRESS_L, W   ;COPY ADDRESS TO W
+00F8   1683 1303      00396     BANKSEL SSPSTAT
+00FA                  00397 RAM_WRITE_AL
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+MPASM  5.43                          MAIN.ASM   5-8-2020  18:39:39         PAGE  9
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+
+00FA   1C14           00398     BTFSS SSPSTAT, BF
+00FB   2???           00399     GOTO RAM_WRITE_AL
+00FC   1283 1303      00400     BANKSEL SSPBUF
+00FE   0093           00401     MOVWF SSPBUF    ;SEND ADDRESS LOW BYTE
+00FF   08??           00402     MOVF DREG, W    ;COPY DATA TO W
+0100   1683 1303      00403     BANKSEL SSPSTAT
+0102                  00404 RAM_WRITE_D
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+0102   1C14           00405     BTFSS SSPSTAT, BF
+0103   2???           00406     GOTO RAM_WRITE_D
+0104   1283 1303      00407     BANKSEL SSPBUF
+0106   0093           00408     MOVWF SSPBUF    ;SEND DATA
+0107   1683 1303      00409     BANKSEL SSPSTAT
+0109                  00410 RAM_WRITE_R
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+0109   1C14           00411     BTFSS SSPSTAT, BF
+010A   2???           00412     GOTO RAM_WRITE_R
+010B   1283 1303      00413     BANKSEL SSPBUF
+010D   0813           00414     MOVF SSPBUF, W  ;COPY DUMMY DATA TO W
+010E   1786           00415     BSF PORTB, 7
+010F   0008           00416     RETURN
+                      00417 
+0110                  00418 RAM_CONFIG
+0110   1386           00419     BCF PORTB, 7    ;CHIP ENABLE
+0111   3001           00420     MOVLW H'01' ;PUT WRITE COMMAND IN W
+0112   0093           00421     MOVWF SSPBUF    ;SEND COMMAND
+0113   3000           00422     MOVLW H'00' ;CONFIGURE FOR BYTE MODE
+0114   1683 1303      00423     BANKSEL SSPSTAT
+0116                  00424 RAM_CONFIG_C
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+0116   1C14           00425     BTFSS SSPSTAT, BF   ;IS THE TRANSMISSION READY
+0117   2???           00426     GOTO RAM_CONFIG_C   ;IF NOT WAIT UNTIL IT IS
+0118   1283 1303      00427     BANKSEL SSPBUF
+011A   0093           00428     MOVWF SSPBUF    ;SEND CONFIG DATA
+011B   1683 1303      00429     BANKSEL SSPSTAT
+011D                  00430 RAM_CONFIG_D
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+011D   1C14           00431     BTFSS SSPSTAT, BF
+011E   2???           00432     GOTO RAM_CONFIG_D
+011F   1283 1303      00433     BANKSEL SSPBUF
+0121   0813           00434     MOVF SSPBUF, W  ;COPY DUMMY DATA TO W
+0122   1786           00435     BSF PORTB, 7
+0123   0008           00436     RETURN
+                      00437 
+0124                  00438 LCD_SEND    ;SENDS DATA OR COMMAND TO LCD SHIFT REGISTER
+0124   00??           00439     MOVWF TEMP3 ;COPY DATA TO TEMP VARIABLE
+0125   3008           00440     MOVLW H'08'
+0126   00??           00441     MOVWF GEN_COUNT3    ;COUNT 8 BITS
+0127                  00442 LCD_SEND_LOOP
+0127   1B80           00443     BTFSC TEMP3,7
+0128   1788           00444     BSF PORTD,7
+0129   1F80           00445     BTFSS TEMP3,7
+012A   1388           00446     BCF PORTD,7
+MPASM  5.43                          MAIN.ASM   5-8-2020  18:39:39         PAGE 10
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+
+012B   0D??           00447     RLF TEMP3,F
+012C   1708           00448     BSF PORTD,6
+012D   0000           00449     NOP
+012E   0000           00450     NOP
+012F   1308           00451     BCF PORTD,6
+0130   0B??           00452     DECFSZ GEN_COUNT3,F
+0131   2???           00453     GOTO LCD_SEND_LOOP
+0132   0008           00454     RETURN
+                      00455 
+0133                  00456 FUNCTIONSET_LCD
+0133   1105           00457         BCF PORTA,2     ;MAKE SURE THAT E STARTS LOW
+0134   1308           00458         BCF PORTD,6     ;MAKE SURE DISPLAY CLOCK STARTS LOW
+0135   1185           00459         BCF PORTA,3     ;RS LINE TO 0 (PORT A BIT 3)
+0136   3038           00460         MOVLW b'00111000'       ;FUNCTION SET COMMAND
+0137   2???           00461         CALL LCD_SEND
+0138   2???           00462         CALL PULSE_E    ;PULSE E LINE HIGH (PORT A BIT 2)
+0139   300A           00463         MOVLW D'10'
+013A   00??           00464         MOVWF DELAY_COUNTER
+013B   2???           00465         CALL DELAY_MILLIS
+013C   0008           00466         RETURN
+                      00467 
+013D                  00468 DISPLAYON
+013D   1185           00469         BCF PORTA,3   ;RS LINE TO 0 (PORT A BIT 3)
+013E   300F           00470         MOVLW 0FH  ;DISPLAY ON/OFF AND CURSOR COMMAND
+013F   2???           00471         CALL LCD_SEND
+0140   2???           00472         CALL PULSE_E
+0141   300A           00473         MOVLW D'10'
+0142   00??           00474         MOVWF DELAY_COUNTER
+0143   2???           00475         CALL DELAY_MILLIS
+0144   0008           00476         RETURN
+                      00477 
+0145                  00478 CLEARDISPLAY
+0145   1185           00479         BCF PORTA,3     ;RS LINE LOW
+0146   3001           00480         MOVLW 01H       ;CLEAR DISPLAY COMMAND
+0147   2???           00481         CALL LCD_SEND   ;WRITE TO DATA LINES
+0148   2???           00482         CALL PULSE_E
+0149   300A           00483         MOVLW D'10'
+014A   00??           00484         MOVWF DELAY_COUNTER
+014B   2???           00485         CALL DELAY_MILLIS
+014C   0008           00486         RETURN
+                      00487 
+014D                  00488 SETHOME_LCD
+014D   1185           00489         BCF PORTA,3 ;RS LINE LOW
+014E   3003           00490         MOVLW 03H   ;DISPLAY AND CURSOR HOME COMMAND
+014F   2???           00491         CALL LCD_SEND ;WRITE TO DATA LINES
+0150   2???           00492         CALL PULSE_E
+0151   3005           00493         MOVLW D'5'
+0152   00??           00494         MOVWF DELAY_COUNTER
+0153   2???           00495         CALL DELAY_MILLIS
+0154   0008           00496         RETURN
+                      00497 
+0155                  00498 LINE2_LCD
+0155   2???           00499         CALL SETHOME_LCD
+MPASM  5.43                          MAIN.ASM   5-8-2020  18:39:39         PAGE 11
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+
+0156   3028           00500         MOVLW 28H   ;SET COUNTER TO 40
+0157   00??           00501         MOVWF GEN_COUNT2
+0158   3010           00502         MOVLW b'00010000'   ;CURSOR LEFT COMMAND
+0159   2???           00503         CALL LCD_SEND ;WRITE COMMAND TO DATA LINES
+015A                  00504 CLLOOP40
+015A   1185           00505         BCF PORTA,3     ;RS LINE LOW (COMMAND MODE)
+015B   2???           00506         CALL PULSE_E
+015C   3002           00507         MOVLW D'2'
+015D   00??           00508         MOVWF DELAY_COUNTER
+015E   2???           00509         CALL DELAY_MILLIS
+015F   0B??           00510         DECFSZ GEN_COUNT2, F
+0160   2???           00511         GOTO CLLOOP40
+0161   0008           00512         RETURN
+                      00513 
+0162                  00514 LCD_CLEAR1
+0162   2???           00515         CALL SETHOME_LCD
+0163   3020           00516         MOVLW H'20' ;SPACE CHAR
+0164   1585           00517         BSF PORTA,3 ;RS LINE HIGH FOR DATA
+0165   2???           00518         CALL LCD_SEND   ;PUT CHAR ON THE DATA LINES
+0166   3014           00519         MOVLW D'20' ;COUNT 20 SPACE CHARS
+0167   00??           00520         MOVWF GEN_COUNT2
+0168                  00521 LCD_CLEAR12
+0168   2???           00522         CALL PULSE_E
+0169   3002           00523         MOVLW D'2'
+016A   00??           00524         MOVWF DELAY_COUNTER
+016B   2???           00525         CALL DELAY_MILLIS
+016C   0B??           00526         DECFSZ GEN_COUNT2, F
+016D   2???           00527         GOTO LCD_CLEAR12
+016E   2???           00528         CALL SETHOME_LCD
+016F   0008           00529         RETURN
+                      00530 
+0170                  00531 LCD_CLEAR2
+0170   2???           00532         CALL LINE2_LCD
+0171   3020           00533         MOVLW H'20' ;SPACE CHAR
+0172   1585           00534         BSF PORTA,3 ;RS LINE HIGH FOR DATA
+0173   2???           00535         CALL LCD_SEND   ;PUT CHAR ON THE DATA LINES
+0174   3014           00536         MOVLW D'20' ;COUNT 20 SPACE CHARS
+0175   00??           00537         MOVWF GEN_COUNT2
+0176                  00538 LCD_CLEAR22
+0176   2???           00539         CALL PULSE_E
+0177   3002           00540         MOVLW D'2'
+0178   00??           00541         MOVWF DELAY_COUNTER
+0179   2???           00542         CALL DELAY_MILLIS
+017A   0B??           00543         DECFSZ GEN_COUNT2, F
+017B   2???           00544         GOTO LCD_CLEAR22
+017C   2???           00545         CALL LINE2_LCD
+017D   0008           00546         RETURN
+                      00547 
+017E                  00548 PULSE_E
+017E   1505           00549         BSF PORTA,2   ;SET E LINE HIGH
+017F   0000           00550         NOP
+0180   0000           00551         NOP
+0181   0000           00552         NOP
+MPASM  5.43                          MAIN.ASM   5-8-2020  18:39:39         PAGE 12
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+
+0182   0000           00553         NOP
+0183   0000           00554         NOP ;MODIFIED FOR 4MHZ CLOCK
+0184   0000           00555         NOP
+0185   0000           00556         NOP
+0186   0000           00557         NOP
+0187   1105           00558         BCF PORTA,2   ;SET E LINE LOW
+0188   0008           00559         RETURN
+                      00560 
+0189                  00561 PRINT_NAME
+0189   1383           00562         BCF STATUS, IRP ;SET BANK 0 AND 1
+018A   30??           00563         MOVLW TAPE_NAME
+018B   0084           00564         MOVWF FSR
+018C   3008           00565         MOVLW D'8'  ;COUNT 8 CHARS
+018D   00??           00566         MOVWF GEN_COUNT2
+018E   1585           00567         BSF PORTA,3 ;RS LINE HIGH FOR DATA
+018F                  00568 PN_LOOP
+018F   0800           00569         MOVF INDF, W
+0190   2???           00570         CALL LCD_SEND
+0191   2???           00571         CALL PULSE_E
+0192   3002           00572         MOVLW D'2'
+0193   00??           00573         MOVWF DELAY_COUNTER
+0194   2???           00574         CALL DELAY_MILLIS
+0195   0A84           00575         INCF FSR, F
+0196   0B??           00576         DECFSZ GEN_COUNT2, F
+0197   2???           00577         GOTO PN_LOOP
+0198   0008           00578         RETURN
+                      00579 
+0199                  00580 PRINT_STRING_LCD
+0199   01??           00581     CLRF STRING_INDEX ;START WITH ZERO OFFSET
+019A   1585           00582     BSF PORTA,3 ;RS LINE HIGH FOR DATA
+019B                  00583 PSL2
+019B   30??           00584     MOVLW HIGH HOME_STRING  ;HOME STRING IS ON A DIFFERENT PAGE
+019C   008A           00585     MOVWF PCLATH
+019D   2???           00586     CALL STRING_TABLE
+019E   00??           00587     MOVWF TEMP1 ;PUT THE RETURN VALUE IN TEMP TO SET CONDITION CODES
+019F   30??           00588     MOVLW HIGH MAIN
+01A0   008A           00589     MOVWF PCLATH    ;SET PCLATH BACK TO PAGE 0
+01A1   08??           00590     MOVF TEMP1, W
+01A2   1903           00591     BTFSC STATUS,Z  ;IF ZERO
+01A3   0008           00592     RETURN
+01A4   2???           00593     CALL LCD_SEND   ;PUT THE CHAR
+01A5   2???           00594     CALL PULSE_E
+01A6   3002           00595     MOVLW D'2'
+01A7   00??           00596     MOVWF DELAY_COUNTER
+01A8   2???           00597     CALL DELAY_MILLIS
+01A9   0A??           00598     INCF STRING_INDEX, F ;INC OFFSET
+01AA   2???           00599     GOTO PSL2 ;DO IT AGAIN
+                      00600 
+01AB                  00601 PRINT_STRING_SERIAL
+01AB   01??           00602     CLRF STRING_INDEX ;START WITH ZERO OFFSET
+01AC                  00603 PSS2
+01AC   30??           00604     MOVLW HIGH HOME_STRING  ;HOME STRING IS ON A DIFFERENT PAGE
+01AD   008A           00605     MOVWF PCLATH
+MPASM  5.43                          MAIN.ASM   5-8-2020  18:39:39         PAGE 13
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+
+01AE   2???           00606     CALL STRING_TABLE
+01AF   00??           00607     MOVWF DREG
+01B0   30??           00608     MOVLW HIGH MAIN
+01B1   008A           00609     MOVWF PCLATH    ;SET PCLATH BACK TO PAGE 0
+01B2   08??           00610     MOVF DREG, F
+01B3   1903           00611     BTFSC STATUS,Z  ;IF ZERO
+01B4   0008           00612     RETURN
+01B5   2???           00613     CALL UART_SEND   ;PUT THE CHAR
+01B6   0A??           00614     INCF STRING_INDEX, F ;INC OFFSET
+01B7   2???           00615     GOTO PSS2 ;DO IT AGAIN
+                      00616 
+01B8                  00617 TAPE_IN
+01B8   30FF           00618     MOVLW H'FF'
+01B9   00??           00619     MOVWF RAM_ADDRESS_H
+01BA   00??           00620     MOVWF RAM_ADDRESS_L
+01BB   1480           00621     BSF FLAG_REG,1 ;DISSABLE RESET IF TRANSMISSION FAILS
+01BC   2???           00622     CALL GET_LEADER
+01BD   1080           00623     BCF FLAG_REG,1 ;ENABLE RESET IF TRANSMISSION FAILS
+01BE   2???           00624     CALL SAVE_FIRST_BLOCK
+01BF   0F??           00625     INCFSZ RAM_ADDRESS_L, F    ;INCREMENT LOW ADDRESS
+01C0   03??           00626     DECF RAM_ADDRESS_H, F
+01C1   0A??           00627     INCF RAM_ADDRESS_H, F       ;IF LOW ADDRESS IS ZERO INCREMENT THE HIGH ADDRESS TOO
+01C2   08??           00628     MOVF RAM_ADDRESS_H, W
+01C3   00??           00629     MOVWF TAPE_SIZE_HIGH
+01C4   08??           00630     MOVF RAM_ADDRESS_L, W
+01C5   00??           00631     MOVWF TAPE_SIZE_LOW
+01C6   01??           00632     CLRF RAM_ADDRESS_H
+01C7   3003           00633     MOVLW H'03'
+01C8   00??           00634     MOVWF RAM_ADDRESS_L
+01C9   1383           00635     BCF STATUS, IRP ;SET BANKS 0 AND 1
+01CA   30??           00636     MOVLW TAPE_NAME
+01CB   0084           00637     MOVWF FSR
+01CC   3008           00638     MOVLW D'08'
+01CD   00??           00639     MOVWF GEN_COUNT
+01CE                  00640 NAME_COPY
+01CE   2???           00641     CALL RAM_READ_AUTO
+01CF   08??           00642     MOVF DREG, W
+01D0   0080           00643     MOVWF INDF
+01D1   0A84           00644     INCF FSR, F
+01D2   0B??           00645     DECFSZ GEN_COUNT, F
+01D3   2???           00646     GOTO NAME_COPY
+01D4   0008           00647     RETURN
+                      00648 
+01D5                  00649 GET_LEADER
+01D5   3080           00650     MOVLW D'128'    ;LENGTH OF LEADER
+01D6   00??           00651     MOVWF GEN_COUNT2
+01D7                  00652 LEADER_LOOP
+01D7   2???           00653     CALL BUILD_BYTE
+01D8   08??           00654     MOVF DREG,W
+01D9   3A55           00655     XORLW H'55'
+01DA   1D03           00656     BTFSS STATUS, Z
+01DB   2???           00657     GOTO GL_FIX
+01DC   0B??           00658     DECFSZ GEN_COUNT2, F
+MPASM  5.43                          MAIN.ASM   5-8-2020  18:39:39         PAGE 14
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+
+01DD   2???           00659     GOTO LEADER_LOOP
+01DE   0008           00660     RETURN
+01DF                  00661 GL_FIX
+01DF   0B??           00662     DECFSZ GEN_COUNT2, F
+01E0   2???           00663     GOTO GL_FIX2
+01E1   2???           00664     GOTO BUILD_PANIC
+01E2                  00665 GL_FIX2
+01E2   2???           00666     CALL BUILD_ALIGN
+01E3   08??           00667     MOVF DREG,W
+01E4   3A55           00668     XORLW H'55'
+01E5   1D03           00669     BTFSS STATUS,Z
+01E6   2???           00670     GOTO BUILD_PANIC
+01E7   0B??           00671     DECFSZ GEN_COUNT2, F
+01E8   2???           00672     GOTO LEADER_LOOP
+01E9   2???           00673     GOTO BUILD_PANIC
+                      00674 
+01EA                  00675 SAVE_FIRST_BLOCK
+01EA   2???           00676     CALL BUILD_BYTE
+01EB   1C00           00677     BTFSS DREG,0    ;CHECK IF BIT 0 IS SET (IF IT IS CLEARED THERE HAS BEEN AN ALIGNMENT ERROR)
+01EC   2???           00678     GOTO BUILD_PANIC
+01ED   2???           00679     CALL RAM_WRITE_AUTO ;SAVE LEADER BYTE
+01EE   2???           00680     CALL BUILD_BYTE
+01EF   2???           00681     CALL RAM_WRITE_AUTO ;SAVE SYNC BYTE
+01F0   2???           00682     CALL BUILD_BYTE
+01F1   2???           00683     CALL RAM_WRITE_AUTO ;SAVE BLOCK TYPE BYTE
+01F2   2???           00684     CALL BUILD_BYTE
+01F3   2???           00685     CALL RAM_WRITE_AUTO ;SAVE BLOCK LENGTH
+01F4   08??           00686     MOVF DREG, W
+01F5   00??           00687     MOVWF GEN_COUNT2
+01F6                  00688 FIRST_BLOCK_LOOP
+01F6   2???           00689     CALL BUILD_BYTE
+01F7   2???           00690     CALL RAM_WRITE_AUTO
+01F8   0B??           00691     DECFSZ GEN_COUNT2, F
+01F9   2???           00692     GOTO FIRST_BLOCK_LOOP
+01FA   2???           00693     CALL BUILD_BYTE
+01FB   2???           00694     CALL RAM_WRITE_AUTO ;SAVE CHECKSUM
+01FC   2???           00695     CALL BUILD_BYTE
+01FD   2???           00696     CALL RAM_WRITE_AUTO ;SAVE LEADER BYTE
+01FE   2???           00697     CALL GET_LEADER ;GETS THE SECOND LEADER
+01FF                  00698 SAVE_BLOCKS
+01FF   2???           00699     CALL BUILD_BYTE
+0200   2???           00700     CALL RAM_WRITE_AUTO ;SAVE LEADER BYTE
+0201   2???           00701     CALL BUILD_BYTE
+0202   2???           00702     CALL RAM_WRITE_AUTO ;SAVE SYNC BYTE
+0203   2???           00703     CALL BUILD_BYTE
+0204   0F??           00704     INCFSZ DREG, W  ;CHECK IF BLOCK IS END OF FILE
+0205   2???           00705     GOTO NOT_EOF_BLOCK
+0206   2???           00706     CALL RAM_WRITE_AUTO ;SAVE BLOCK TYPE
+0207   2???           00707     CALL BUILD_BYTE
+0208   2???           00708     CALL RAM_WRITE_AUTO ;SAVE BLOCK LENGTH
+0209   2???           00709     CALL BUILD_BYTE
+020A   2???           00710     CALL RAM_WRITE_AUTO ;SAVE CHECKSUM
+020B   2???           00711     CALL BUILD_BYTE
+MPASM  5.43                          MAIN.ASM   5-8-2020  18:39:39         PAGE 15
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+
+020C   2???           00712     CALL RAM_WRITE_AUTO ;SAVE LEADER BYTE
+020D   0008           00713     RETURN
+020E                  00714 NOT_EOF_BLOCK
+020E   2???           00715     CALL RAM_WRITE_AUTO ;SAVE BLOCK TYPE
+020F   2???           00716     CALL BUILD_BYTE
+0210   2???           00717     CALL RAM_WRITE_AUTO ;SAVE LENGTH BYTE
+0211   08??           00718     MOVF DREG, W
+0212   00??           00719     MOVWF GEN_COUNT2 ;COPY LENGTH TO GEN_COUNT2
+0213                  00720 BLOCK_DATA_LOOP
+0213   2???           00721     CALL BUILD_BYTE
+0214   2???           00722     CALL RAM_WRITE_AUTO
+0215   0B??           00723     DECFSZ GEN_COUNT2, F
+0216   2???           00724     GOTO BLOCK_DATA_LOOP
+0217   2???           00725     CALL BUILD_BYTE
+0218   2???           00726     CALL RAM_WRITE_AUTO ;SAVE CHECKSUM
+0219   2???           00727     CALL BUILD_BYTE
+021A   2???           00728     CALL RAM_WRITE_AUTO ;SAVE LEADER BYTE
+021B   2???           00729     GOTO SAVE_BLOCKS
+                      00730 
+021C                  00731 BUILD_ALIGN ;SKIPS INITIAL WAIT IN AN ATTEMPT TO FIX ALIGNMENT. BUILD_BYTE IS THE NORMAL ENTRY POINT
+021C   3008           00732     MOVLW H'08'
+021D   00??           00733     MOVWF GEN_COUNT ;INITIALIZE COUNTER TO 8
+021E   0806           00734     MOVF PORTB, W
+021F   3A02           00735     XORLW H'02' ;INVERT TAPE BIT
+0220   00??           00736     MOVWF TEMP1     ;COPY PORTB TO TEMP1
+0221   2???           00737     GOTO WAIT_STOP
+0222                  00738 BUILD_BYTE
+0222   3008           00739     MOVLW H'08'
+0223   00??           00740     MOVWF GEN_COUNT ;INITIALIZE COUNTER TO 8
+0224                  00741 BUILD_LOOP
+0224   0806           00742     MOVF PORTB, W
+0225   00??           00743     MOVWF TEMP1     ;COPY PORTB TO TEMP1
+0226   01??           00744     CLRF PULSE_LENGTH
+0227   0C??           00745     RRF DREG, F
+0228   1380           00746     BCF DREG, 7
+0229                  00747 WAIT_START
+0229   0806           00748     MOVF PORTB, W
+022A   06??           00749     XORWF TEMP1, W  ;COMPARE PORTB WITH PREVIOUS STATE
+022B   00??           00750     MOVWF TEMP2     ;STORE RESULT IN TEMP2
+022C   1C80           00751     BTFSS TEMP2, 1
+022D   2???           00752     GOTO WAIT_START ;IF STATE HAS NOT CHANGED KEEP WAITING
+022E                  00753 WAIT_STOP
+022E   2???           00754     CALL TAPE_DELAY
+022F   0A??           00755     INCF PULSE_LENGTH, F        ;#1
+0230   08??           00756     MOVF PULSE_LENGTH, W    ;#2
+0231   3C16           00757     SUBLW D'22'     ;#3
+0232   1803           00758     BTFSC STATUS, C ;CHECK IF LENGTH IS GREATER THAN 22 #4
+0233   2???           00759     GOTO BUILD_NO_ERROR ;IF NOT CONTINUE NORMALLY #6
+0234                  00760 BUILD_ERROR
+0234   1C80           00761     BTFSS FLAG_REG, 1 ;IF ERROR IS IN FIRST BYTE TRY TO RECOVER
+0235   2???           00762     GOTO BUILD_PANIC   ;IF NOT RESET TO AVOID INFINITE LOOP
+                      00763     ;MOVF GEN_COUNT, W
+                      00764     ;SUBLW H'08'
+MPASM  5.43                          MAIN.ASM   5-8-2020  18:39:39         PAGE 16
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+
+                      00765     ;BTFSS STATUS, Z ;CHECK IF ERROR IS IN FIRST BIT
+                      00766     ;GOTO BUILD_PANIC   ; IF NOT RESET TO AVOID INFINITE LOOP
+0236   2???           00767     GOTO BUILD_BYTE ;IF IT IS IN FIRST BIT OF FIRST BYTE RESTART SUBROUTINE
+0237                  00768 BUILD_NO_ERROR
+0237   0806           00769     MOVF PORTB, W   ;#7
+0238   06??           00770     XORWF TEMP1, W  ;#8
+0239   00??           00771     MOVWF TEMP2     ;#9
+023A   1880           00772     BTFSC TEMP2, 1  ;#10
+023B   2???           00773     GOTO WAIT_STOP  ;WAIT UNTIL TAPE INPUT RETURNS TO ORIGINAL STATE #12
+023C   08??           00774     MOVF PULSE_LENGTH, W
+023D   3C08           00775     SUBLW D'08'
+023E   1803           00776     BTFSC STATUS, C ;CHECK IF LENGTH IS LESS THAN 8
+023F   2???           00777     GOTO BUILD_ERROR    ;IF IT IS GO TO LOCAL ERROR HANDLER
+0240   300F           00778     MOVLW D'15'
+0241   02??           00779     SUBWF PULSE_LENGTH, F   ;SUBTRACT THRESHOLD FROM PULSE LENGTH
+0242   1B80           00780     BTFSC PULSE_LENGTH, 7   ;CHECK IF PULSE LENGHT IS NEGATIVE
+0243   1780           00781     BSF DREG, 7             ;IF IT IS SET BIT IN DREG
+0244   0B??           00782     DECFSZ GEN_COUNT, F
+0245   2???           00783     GOTO BUILD_LOOP
+0246   3400           00784     RETLW H'00' ;RETURN ZERO TO INDICATE SUCCESS
+                      00785 
+0247                  00786 BUILD_PANIC ;ENABLES THE WATCHDOG TO CAUSE A RESET
+0247   1283 1703      00787     BANKSEL WDTCON
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+0249   1405           00788     BSF WDTCON, SWDTEN  ;ENABLE WATCHDOG
+024A                  00789 BP_HALT
+024A   2???           00790     GOTO BP_HALT    ;WAIT FOR THE WATCHDOG TO DO THE THING
+                      00791 
+024B                  00792 TAPE_DELAY
+024B   0000           00793     NOP
+024C   0000           00794     NOP
+024D   0000           00795     NOP
+024E   0000           00796     NOP
+024F   0000           00797     NOP ;5 CYCLE DELAY
+0250   0008           00798     RETURN
+                      00799 
+0251                  00800 TAPE_OUT
+0251   01??           00801     CLRF TEMP1
+0252   01??           00802     CLRF BIT_COUNT
+0253   30FF           00803     MOVLW H'FF'
+0254   00??           00804     MOVWF RAM_ADDRESS_H
+0255   00??           00805     MOVWF RAM_ADDRESS_L ;RAM READ FUNCTION WILL AUTO INCREMENT ADDRESS, SO IT SHOULD OVERFLOW WHEN IT IS
+                             FIRST CALLED
+0256   3055           00806     MOVLW H'55'
+0257   00??           00807     MOVWF DREG  ;TAPE LEADER VALUE
+0258   307F           00808     MOVLW D'127'
+0259   00??           00809     MOVWF GEN_COUNT ;128 LEADER BYTES
+025A   0181           00810     CLRF TMR0
+025B   0000           00811     NOP
+025C   110B           00812     BCF INTCON, T0IF
+025D   178B           00813     BSF INTCON, GIE     ;ENABLE INTERRUPT
+025E                  00814 LEADER_OUT
+025E   1D00           00815     BTFSS BIT_COUNT, 2
+MPASM  5.43                          MAIN.ASM   5-8-2020  18:39:39         PAGE 17
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+
+025F   2???           00816     GOTO LEADER_OUT     ;WAIT UNTIL BIT COUNT IS NOT ZERO
+0260                  00817 LEADER_WAIT
+0260   1900           00818     BTFSC BIT_COUNT, 2
+0261   2???           00819     GOTO LEADER_WAIT    ;WAIT UNTIL BIT_COUNT IS ZERO
+0262   0B??           00820     DECFSZ GEN_COUNT, F
+0263   2???           00821     GOTO LEADER_OUT     ;LOOP UNTIL 128 LEADER BYTES HAVE BEEN SENT
+0264   3016           00822     MOVLW D'22'
+0265   00??           00823     MOVWF GEN_COUNT     ;ONE PAST THE END OF THE NAME FILE
+0266                  00824 TAPE_NAMEBLOCK
+0266   2???           00825     CALL RAM_READ_AUTO  ;GET FIRST BYTE
+0267                  00826 TAPE_W1
+0267   1D00           00827     BTFSS BIT_COUNT, 2
+0268   2???           00828     GOTO TAPE_W1    ;WAIT UNTIL BIT COUNT IS NOT ZERO
+0269                  00829 TAPE_W2
+0269   1900           00830     BTFSC BIT_COUNT, 2
+026A   2???           00831     GOTO TAPE_W2
+026B   0B??           00832     DECFSZ GEN_COUNT, F
+026C   2???           00833     GOTO TAPE_NAMEBLOCK
+026D   138B           00834     BCF INTCON, GIE ;STOP INTERRUPT
+026E   2???           00835     CALL TAPE_PAUSE ;1/2 SECOND SILENCE
+026F   307F           00836     MOVLW D'127'
+0270   00??           00837     MOVWF GEN_COUNT ;128 LEADER BYTES
+0271   0181           00838     CLRF TMR0
+0272   01??           00839     CLRF TEMP1
+0273   0000           00840     NOP
+0274   110B           00841     BCF INTCON, T0IF
+0275   178B           00842     BSF INTCON, GIE     ;ENABLE INTERRUPT
+0276                  00843 LEADER_OUT2
+0276   1D00           00844     BTFSS BIT_COUNT, 2
+0277   2???           00845     GOTO LEADER_OUT2    ;WAIT UNTIL BIT COUNT IS NOT ZERO
+0278                  00846 LEADER_WAIT2
+0278   1900           00847     BTFSC BIT_COUNT, 2
+0279   2???           00848     GOTO LEADER_WAIT2   ;WAIT UNTIL BIT_COUNT IS ZERO
+027A   0B??           00849     DECFSZ GEN_COUNT, F
+027B   2???           00850     GOTO LEADER_OUT2    ;LOOP UNTIL 128 LEADER BYTES HAVE BEEN SENT
+027C                  00851 TAPE_NE
+027C   2???           00852     CALL RAM_READ_AUTO
+027D                  00853 TAPE_W3
+027D   1D00           00854     BTFSS BIT_COUNT, 2
+027E   2???           00855     GOTO TAPE_W3    ;WAIT UNTIL BIT_COUNT IS NOT ZERO
+027F                  00856 TAPE_W4
+027F   1900           00857     BTFSC BIT_COUNT, 2
+0280   2???           00858     GOTO TAPE_W4
+0281   08??           00859     MOVF TAPE_SIZE_HIGH, W
+0282   06??           00860     XORWF RAM_ADDRESS_H, W
+0283   00??           00861     MOVWF TEMP3 ;STORE RESULT IN TEMP3
+0284   0A??           00862     INCF TEMP3, F   ;INCREMENT RESULT
+0285   0B??           00863     DECFSZ TEMP3, F
+0286   2???           00864     GOTO TAPE_NE
+0287   08??           00865     MOVF TAPE_SIZE_LOW, W
+0288   06??           00866     XORWF RAM_ADDRESS_L, W
+0289   00??           00867     MOVWF TEMP3 ;STORE RESULT IN TEMP3
+028A   0A??           00868     INCF TEMP3, F
+MPASM  5.43                          MAIN.ASM   5-8-2020  18:39:39         PAGE 18
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+
+028B   0B??           00869     DECFSZ TEMP3, F
+028C   2???           00870     GOTO TAPE_NE
+028D   138B           00871     BCF INTCON, GIE
+028E   0008           00872     RETURN
+                      00873 
+028F                  00874 TAPE_INT
+028F   00??           00875     MOVWF TEMP4 ;SAVE W REG
+0290   110B           00876     BCF INTCON, T0IF
+0291   303B           00877     MOVLW D'59' ;USED TO BE 58, CHANGED IT BECAUSE I ADDED THE SAVE W INSTRUCTION
+0292   0081           00878     MOVWF TMR0  ;PRELOAD TIMER
+0293   1800           00879     BTFSC TEMP1, 0  ;IDENTIFY PHASE
+0294   2???           00880     GOTO PHASE1
+0295   1880           00881     BTFSC TEMP1, 1
+0296   2???           00882     GOTO PHASE2
+0297   1900           00883     BTFSC TEMP1, 2
+0298   2???           00884     GOTO PHASE3
+0299   1980           00885     BTFSC TEMP1, 3
+029A   2???           00886     GOTO PHASE4
+029B   3004           00887     MOVLW B'00000100'   ;DEFAULT PHASE - LOAD NEW DATA AND INITIALIZE VARIABLES
+029C   0686           00888     XORWF PORTB, F  ;TOGGLE TAPE OUT
+029D   08??           00889     MOVF DREG, W
+029E   00??           00890     MOVWF TEMP2     ;COPY NEW DATA TO BUFFER
+029F   01??           00891     CLRF BIT_COUNT
+02A0   3001           00892     MOVLW H'01'
+02A1   00??           00893     MOVWF TEMP1 ;SET PHASE TO 1
+02A2   08??           00894     MOVF TEMP4, W   ;RESTORE W
+02A3   0009           00895     RETFIE
+02A4                  00896 PHASE1  ;TOGGLE IF BIT IS 1
+02A4   3004           00897         MOVLW B'00000100'       ;WILL USE THIS TO TOGGLE OUTPUT
+02A5   1800           00898         BTFSC TEMP2, 0  ;CHECK IF BIT IS 1 OR 0
+02A6   0686           00899         XORWF PORTB, F  ;IF BIT IS 1 TOGGLE OUTPUT
+02A7   3002           00900         MOVLW H'02'
+02A8   00??           00901         MOVWF TEMP1     ;SET PHASE TO 2
+02A9   08??           00902         MOVF TEMP4, W   ;RESTORE W
+02AA   0009           00903         RETFIE
+02AB                  00904 PHASE2  ;ALWAYS TOGGLE
+02AB   3004           00905         MOVLW B'00000100'
+02AC   0686           00906         XORWF PORTB, F  ;TOGGLE OUTPUT
+02AD   1800           00907         BTFSC TEMP2, 0  ;CHECK IF BIT IS 1 OR 0
+02AE   2???           00908         GOTO PHASE2_NEXT        ;IF BIT IS SET THEN LOAD NEXT BIT AND RESET PHASE
+02AF   3004           00909         MOVLW H'04'
+02B0   00??           00910         MOVWF TEMP1     ;SET PHASE TO 3
+02B1   08??           00911         MOVF TEMP4, W   ;RESTORE W
+02B2   0009           00912         RETFIE
+02B3                  00913 PHASE3  ;NEVER TOGGLE
+02B3   3008           00914         MOVLW H'08'
+02B4   00??           00915         MOVWF TEMP1     ;SET PHASE TO 4
+02B5   08??           00916         MOVF TEMP4, W
+02B6   0009           00917         RETFIE
+02B7                  00918 PHASE4  ;ALWAYS TOGGLE
+02B7   3004           00919         MOVLW B'00000100'
+02B8   0686           00920         XORWF PORTB, F  ;TOGGLE OUTPUT
+02B9                  00921 PHASE2_NEXT
+MPASM  5.43                          MAIN.ASM   5-8-2020  18:39:39         PAGE 19
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+
+02B9   3001           00922     MOVLW H'01'
+02BA   00??           00923     MOVWF TEMP1 ;SET PHASE TO 1
+02BB   0C??           00924     RRF TEMP2, F        ;SHIFT TO NEXT BIT
+02BC   0A??           00925     INCF BIT_COUNT, F   ;NEXT BIT COUNT
+02BD   1D80           00926     BTFSS BIT_COUNT, 3  ;CHECK IF BIT COUNT HAS REACHED 8
+02BE   2???           00927     GOTO PHASE_DONE     ;IF NOT, RETURN
+02BF   01??           00928     CLRF BIT_COUNT      ;CLEAR BIT COUNT
+02C0   08??           00929     MOVF DREG, W
+02C1   00??           00930     MOVWF TEMP2 ;COPY NEW DATA TO BUFFER
+02C2                  00931 PHASE_DONE
+02C2   08??           00932     MOVF TEMP4, W
+02C3   0009           00933     RETFIE
+                      00934 
+02C4                  00935 TAPE_PAUSE
+02C4   3020           00936     MOVLW D'32'
+02C5   00??           00937     MOVWF GEN_COUNT
+02C6                  00938 TP1
+02C6   3036           00939     MOVLW D'54'
+02C7   00??           00940     MOVWF GEN_COUNT2
+02C8                  00941 TP2
+02C8   305F           00942     MOVLW D'95'
+02C9   00??           00943     MOVWF LDEL_COUNT
+02CA                  00944 TP3
+02CA   0B??           00945     DECFSZ LDEL_COUNT, F
+02CB   2???           00946     GOTO TP3
+02CC   0B??           00947     DECFSZ GEN_COUNT2, F
+02CD   2???           00948     GOTO TP2
+02CE   0B??           00949     DECFSZ GEN_COUNT, F
+02CF   2???           00950     GOTO TP1
+02D0   0008           00951     RETURN
+                      00952 
+02D1                  00953 SPI_TRANSFER
+02D1   08??           00954     MOVF DREG,W
+02D2   0093           00955     MOVWF SSPBUF    ;SEND DATA
+02D3   1683 1303      00956     BANKSEL SSPSTAT
+02D5                  00957 SPI_WAIT
+Message[302]: Register in operand not in bank 0.  Ensure that bank bits are correct.
+02D5   1C14           00958     BTFSS SSPSTAT, BF   ;IS THE TRANSMISSION READY
+02D6   2???           00959     GOTO SPI_WAIT       ;IF NOT WAIT UNTIL IT IS
+02D7   1283 1303      00960     BANKSEL SSPBUF
+02D9   0813           00961     MOVF SSPBUF, W  ;COPY DATA TO W
+02DA   00??           00962     MOVWF DREG  ;PUT DATA IN DREG
+02DB   0008           00963     RETURN
+                      00964 
+02DC                  00965 BYTE_TO_HEX
+02DC   ????           00966     PAGESEL HOME_STRING
+02DD   08??           00967     MOVF DREG,W
+02DE   390F           00968     ANDLW H'0F'
+02DF   2???           00969     CALL HEX_STRING
+02E0   00??           00970     MOVWF HEX_CHAR_LOW
+02E1   0E??           00971     SWAPF DREG,W
+02E2   390F           00972     ANDLW H'0F'
+02E3   2???           00973     CALL HEX_STRING
+MPASM  5.43                          MAIN.ASM   5-8-2020  18:39:39         PAGE 20
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+
+02E4   00??           00974     MOVWF HEX_CHAR_HIGH
+02E5   ????           00975     PAGESEL INITIALIZE
+02E6   0008           00976     RETURN
+                      00977 
+02E7                  00978 BUILD_WORD  ;GENERATES PSEUDO-RANDOM TEST DATA
+02E7   3010           00979     MOVLW D'16'
+02E8   00??           00980     MOVWF GEN_COUNT4
+02E9                  00981 BUILD_WORD_LOOP
+                      00982     ;GET WORD HERE
+02E9   01??           00983     CLRF TEMP3  ;THIS WILL CONTAIN BIT 7 OF S_REG_LOW
+02EA   1B80           00984     BTFSC S_REG_LOW,7
+02EB   1400           00985     BSF TEMP3,0
+02EC   08??           00986     MOVF S_REG_LOW,W
+02ED   3901           00987     ANDLW H'01'     ;GET BIT 0
+02EE   06??           00988     XORWF TEMP3,F   ;TEMP3 NOW CONTAINS BIT0 AND BIT7 XORED TOGETHER
+02EF   0C??           00989     RRF TEMP3,F
+02F0   0C??           00990     RRF S_REG_HIGH,F
+02F1   0C??           00991     RRF S_REG_LOW, F
+02F2   0B??           00992     DECFSZ GEN_COUNT4,F
+02F3   2???           00993     GOTO BUILD_WORD_LOOP
+02F4   0008           00994     RETURN
+                      00995 
+02F5                  00996 GET_TEST_BYTE   ;SPLITS PSEUDO-RANDOM TEST DATA INTO SINGLE BYTES
+02F5   1C00           00997     BTFSS FLAG_REG,0
+02F6   2???           00998     GOTO GTB_UPDATE
+02F7   08??           00999     MOVF S_REG_LOW,W
+02F8   00??           01000     MOVWF DREG
+02F9   1000           01001     BCF FLAG_REG,0
+02FA   0008           01002     RETURN
+02FB                  01003 GTB_UPDATE
+02FB   2???           01004     CALL BUILD_WORD
+02FC   1400           01005     BSF FLAG_REG,0
+02FD   08??           01006     MOVF S_REG_HIGH,W
+02FE   00??           01007     MOVWF DREG
+02FF   0008           01008     RETURN
+                      01009 
+0300                  01010 DELAY_MILLIS    ;DESIGNED FOR 4MHZ CLOCK
+0300   3014           01011     MOVLW D'20'
+0301   00??           01012     MOVWF LDEL_COUNT
+0302                  01013 DM_OUTER
+0302   3010           01014     MOVLW D'16'
+0303   00??           01015     MOVWF SDEL_COUNT
+0304                  01016 DM_INNER
+0304   0B??           01017     DECFSZ SDEL_COUNT,F
+0305   2???           01018     GOTO DM_INNER
+0306   0B??           01019     DECFSZ LDEL_COUNT,F
+0307   2???           01020     GOTO DM_OUTER
+0308   0B??           01021     DECFSZ DELAY_COUNTER,F
+0309   2???           01022     GOTO DELAY_MILLIS
+030A   0008           01023     RETURN
+                      01024 
+030B                  01025 PRINT_TEST_DATA
+030B   01??           01026     CLRF GEN_COUNT
+MPASM  5.43                          MAIN.ASM   5-8-2020  18:39:39         PAGE 21
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+
+030C                  01027 PTD_OUTER
+030C   01??           01028     CLRF GEN_COUNT2
+030D                  01029 PTD_INNER
+030D   08??           01030     MOVF GEN_COUNT2,W
+030E   390F           01031     ANDLW H'0F'
+030F   1D03           01032     BTFSS STATUS,Z  ;EVERY 16 WORDS PRINT A NEWLINE
+0310   2???           01033     GOTO PTD_NO_NEWLINE
+0311   300A           01034     MOVLW H'0A' ;NEWLINE CHAR
+0312   00??           01035     MOVWF DREG
+0313   2???           01036     CALL UART_SEND
+0314                  01037 PTD_NO_NEWLINE
+0314   2???           01038     CALL GET_TEST_BYTE  ;GET MSB
+0315   2???           01039     CALL BYTE_TO_HEX
+0316   08??           01040     MOVF HEX_CHAR_HIGH,W
+0317   00??           01041     MOVWF DREG
+0318   2???           01042     CALL UART_SEND  ;HIGH NIBBLE HIGH BYTE
+0319   08??           01043     MOVF HEX_CHAR_LOW,W
+031A   00??           01044     MOVWF DREG
+031B   2???           01045     CALL UART_SEND  ;LOW NIBBLE HIGH BYTE
+031C   2???           01046     CALL GET_TEST_BYTE  ;GET LSB
+031D   2???           01047     CALL BYTE_TO_HEX
+031E   08??           01048     MOVF HEX_CHAR_HIGH,W
+031F   00??           01049     MOVWF DREG
+0320   2???           01050     CALL UART_SEND  ;HIGH NIBBLE LOW BYTE
+0321   08??           01051     MOVF HEX_CHAR_LOW,W
+0322   00??           01052     MOVWF DREG
+0323   2???           01053     CALL UART_SEND  ;LOW NIBBLE LOW BYTE
+0324   0B??           01054     DECFSZ GEN_COUNT2,F
+0325   2???           01055     GOTO PTD_INNER
+0326   0B??           01056     DECFSZ GEN_COUNT,F
+0327   2???           01057     GOTO PTD_OUTER
+0328   0008           01058     RETURN
+                      01059 
+0329                  01060 CHECK_FREE_SPACE
+0329   1180           01061     BCF FLAG_REG, 3
+032A   1200           01062     BCF FLAG_REG, 4
+032B   08??           01063     MOVF USB_FREE_SPACE3, F
+032C   1D03           01064     BTFSS STATUS, Z
+032D   2???           01065     GOTO CFS2
+032E   1580           01066     BSF FLAG_REG, 3
+032F   1600           01067     BSF FLAG_REG, 4
+0330   0008           01068     RETURN
+0331                  01069 CFS2
+0331   08??           01070     MOVF USB_FREE_SPACE2, W
+0332   3C02           01071     SUBLW H'02'
+0333   1C03           01072     BTFSS STATUS, C
+0334   2???           01073     GOTO CFS3
+0335   1580           01074     BSF FLAG_REG, 3
+0336   1600           01075     BSF FLAG_REG, 4
+0337   0008           01076     RETURN
+0338                  01077 CFS3
+0338   08??           01078     MOVF USB_FREE_SPACE1, W
+0339   06??           01079     XORWF TAPE_SIZE_HIGH, W
+MPASM  5.43                          MAIN.ASM   5-8-2020  18:39:39         PAGE 22
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+
+033A   1903           01080     BTFSC STATUS, Z
+033B   2???           01081     GOTO CFS4
+033C   08??           01082     MOVF TAPE_SIZE_HIGH, W
+033D   02??           01083     SUBWF USB_FREE_SPACE1, W
+033E   1803           01084     BTFSC STATUS, C
+033F   1580           01085     BSF FLAG_REG, 3
+0340   0008           01086     RETURN
+0341                  01087 CFS4
+0341   08??           01088     MOVF TAPE_SIZE_LOW, F
+0342   1903           01089     BTFSC STATUS, Z
+0343   1580           01090     BSF FLAG_REG, 3
+0344   0008           01091     RETURN
+                      01092 
+0345                  01093 USB_RESET_ALL
+0345   1305           01094     BCF PORTA,6 ;CH376 CE LINE LOW
+0346   3005           01095     MOVLW H'05' ;RESET ALL COMMAND
+0347   00??           01096     MOVWF DREG
+0348   2???           01097     CALL SPI_TRANSFER
+0349   1705           01098     BSF PORTA,6 ;CH376S CE LINE HIGH
+034A   0008           01099     RETURN
+                      01100 
+034B                  01101 USB_SET_FILE_NAME
+034B   1383           01102     BCF STATUS, IRP
+034C   30??           01103     MOVLW TAPE_NAME ;NAME ADDRESS
+034D   0084           01104     MOVWF FSR
+034E   3008           01105     MOVLW H'08' ;NAME LENGTH
+034F   00??           01106     MOVWF GEN_COUNT4
+0350   1305           01107     BCF PORTA,6
+0351   302F           01108     MOVLW H'2F' ;SET FILE NAME COMMAND
+0352   00??           01109     MOVWF DREG
+0353   2???           01110     CALL SPI_TRANSFER
+0354   302F           01111     MOVLW H'2F' ;'\' CHAR NEEDED AT START OF NAME
+0355   00??           01112     MOVWF DREG
+0356   2???           01113     CALL SPI_TRANSFER
+0357                  01114 USFN_LOOP
+0357   0800           01115     MOVF INDF,W
+0358   00??           01116     MOVWF DREG
+0359   2???           01117     CALL SPI_TRANSFER
+035A   0A84           01118     INCF FSR, F
+035B   0B??           01119     DECFSZ GEN_COUNT4,F
+035C   2???           01120     GOTO USFN_LOOP
+035D   01??           01121     CLRF DREG   ;NULL CHAR AT END OF NAME
+035E   2???           01122     CALL SPI_TRANSFER
+035F   1705           01123     BSF PORTA,6 ;CE LINE HIGH
+0360   0008           01124     RETURN
+                      01125 
+0361                  01126 USB_FILE_OPEN
+0361   1305           01127     BCF PORTA,6
+0362   3032           01128     MOVLW H'32' ;FILE OPEN COMMAND
+0363   00??           01129     MOVWF DREG
+0364   2???           01130     CALL SPI_TRANSFER
+0365   1705           01131     BSF PORTA, 6
+0366   0008           01132     RETURN
+MPASM  5.43                          MAIN.ASM   5-8-2020  18:39:39         PAGE 23
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+
+                      01133 
+0367                  01134 USB_FILE_CLOSE
+0367   1305           01135     BCF PORTA,6
+0368   3036           01136     MOVLW H'36' ;FILE CLOSE COMMAND
+0369   00??           01137     MOVWF DREG
+036A   2???           01138     CALL SPI_TRANSFER
+036B   3001           01139     MOVLW H'01' ;UPDATE FILE LENGTH
+036C   00??           01140     MOVWF DREG
+036D   2???           01141     CALL SPI_TRANSFER
+036E   1705           01142     BSF PORTA,6
+036F   0008           01143     RETURN
+                      01144 
+0370                  01145 USB_BYTE_READ
+0370   1305           01146     BCF PORTA,6
+0371   303A           01147     MOVLW H'3A' ;BYTE READ COMMAND
+0372   00??           01148     MOVWF DREG
+0373   2???           01149     CALL SPI_TRANSFER
+0374   08??           01150     MOVF USB_FILE_SIZE_LOW,W
+0375   00??           01151     MOVWF DREG
+0376   2???           01152     CALL SPI_TRANSFER
+0377   08??           01153     MOVF USB_FILE_SIZE_HIGH,W
+0378   00??           01154     MOVWF DREG
+0379   2???           01155     CALL SPI_TRANSFER
+037A   1705           01156     BSF PORTA,6
+037B   0008           01157     RETURN
+                      01158 
+037C                  01159 USB_BYTE_READ_GO
+037C   1305           01160     BCF PORTA,6
+037D   303B           01161     MOVLW H'3B' ;BYTE READ GO COMMAND
+037E   00??           01162     MOVWF DREG
+037F   2???           01163     CALL SPI_TRANSFER
+0380   1705           01164     BSF PORTA,6
+0381   0008           01165     RETURN
+                      01166 
+0382                  01167 USB_READ_DATA0
+0382   1305           01168     BCF PORTA,6
+0383   3027           01169     MOVLW H'27' ;READ DATA0 COMMAND
+0384   00??           01170     MOVWF DREG
+0385   2???           01171     CALL SPI_TRANSFER
+0386   01??           01172     CLRF DREG
+0387   2???           01173     CALL SPI_TRANSFER   ;GET NUMBER OF BYTES TO READ
+0388   08??           01174     MOVF DREG,W
+0389   07??           01175     ADDWF USB_BYTES_READ_LOW, F
+038A   1803           01176     BTFSC STATUS, C
+038B   0A??           01177     INCF USB_BYTES_READ_HIGH, F
+038C   00??           01178     MOVWF GEN_COUNT4
+038D                  01179 URD_LOOP
+038D   01??           01180     CLRF DREG
+038E   2???           01181     CALL SPI_TRANSFER
+038F   2???           01182     CALL RAM_WRITE_AUTO
+0390   0B??           01183     DECFSZ GEN_COUNT4,F
+0391   2???           01184     GOTO URD_LOOP
+0392   1705           01185     BSF PORTA,6
+MPASM  5.43                          MAIN.ASM   5-8-2020  18:39:39         PAGE 24
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+
+0393   0008           01186     RETURN
+                      01187 
+0394                  01188 USB_GET_FILE_SIZE
+0394   1305           01189     BCF PORTA,6
+0395   300C           01190     MOVLW H'0C' ;GET FILE SIZE COMMAND
+0396   00??           01191     MOVWF DREG
+0397   2???           01192     CALL SPI_TRANSFER
+0398   3068           01193     MOVLW H'68' ;COMMAND DATA
+0399   00??           01194     MOVWF DREG
+039A   2???           01195     CALL SPI_TRANSFER
+039B   01??           01196     CLRF DREG
+039C   2???           01197     CALL SPI_TRANSFER
+039D   08??           01198     MOVF DREG,W
+039E   00??           01199     MOVWF USB_FILE_SIZE_LOW
+039F   01??           01200     CLRF DREG
+03A0   2???           01201     CALL SPI_TRANSFER
+03A1   08??           01202     MOVF DREG,W
+03A2   00??           01203     MOVWF USB_FILE_SIZE_HIGH
+03A3   01??           01204     CLRF DREG
+03A4   2???           01205     CALL SPI_TRANSFER
+03A5   01??           01206     CLRF DREG
+03A6   2???           01207     CALL SPI_TRANSFER   ;DISCARD UPPER BYTES OF FILE SIZE
+03A7   1705           01208     BSF PORTA,6
+03A8   0008           01209     RETURN
+                      01210 
+03A9                  01211 USB_CHECK_EXISTS
+03A9   1305           01212     BCF PORTA,6
+03AA   08??           01213     MOVF DREG,W
+03AB   00??           01214     MOVWF TEMP4
+03AC   3006           01215     MOVLW H'06'
+03AD   00??           01216     MOVWF DREG
+03AE   2???           01217     CALL SPI_TRANSFER   ;SEND CHECK_EXISTS COMMAND
+03AF   08??           01218     MOVF TEMP4,W
+03B0   00??           01219     MOVWF DREG
+03B1   2???           01220     CALL SPI_TRANSFER   ;SEND TEST DATA
+03B2   01??           01221     CLRF DREG
+03B3   2???           01222     CALL SPI_TRANSFER   ;GET RESULT
+03B4   1705           01223     BSF PORTA,6
+03B5   0008           01224     RETURN
+                      01225 
+03B6                  01226 USB_FILE_CREATE
+03B6   1305           01227     BCF PORTA, 6
+03B7   3034           01228     MOVLW H'34'
+03B8   00??           01229     MOVWF DREG
+03B9   2???           01230     CALL SPI_TRANSFER
+03BA   1705           01231     BSF PORTA, 6
+03BB   0008           01232     RETURN
+                      01233 
+03BC                  01234 USB_BYTE_WRITE
+03BC   1305           01235     BCF PORTA, 6
+03BD   303C           01236     MOVLW H'3C'
+03BE   00??           01237     MOVWF DREG
+03BF   2???           01238     CALL SPI_TRANSFER
+MPASM  5.43                          MAIN.ASM   5-8-2020  18:39:39         PAGE 25
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+
+03C0   08??           01239     MOVF USB_FILE_SIZE_LOW, W
+03C1   00??           01240     MOVWF DREG
+03C2   2???           01241     CALL SPI_TRANSFER
+03C3   08??           01242     MOVF USB_FILE_SIZE_HIGH, W
+03C4   00??           01243     MOVWF DREG
+03C5   2???           01244     CALL SPI_TRANSFER
+03C6   1705           01245     BSF PORTA, 6
+03C7   0008           01246     RETURN
+                      01247 
+03C8                  01248 USB_BYTE_WR_GO
+03C8   1305           01249     BCF PORTA, 6
+03C9   303D           01250     MOVLW H'3D'
+03CA   00??           01251     MOVWF DREG
+03CB   2???           01252     CALL SPI_TRANSFER
+03CC   1705           01253     BSF PORTA, 6
+03CD   0008           01254     RETURN
+                      01255 
+03CE                  01256 USB_GET_STATUS
+03CE   1305           01257     BCF PORTA, 6
+03CF   3022           01258     MOVLW H'22'
+03D0   00??           01259     MOVWF DREG
+03D1   2???           01260     CALL SPI_TRANSFER
+03D2   01??           01261     CLRF DREG
+03D3   2???           01262     CALL SPI_TRANSFER
+03D4   1705           01263     BSF PORTA, 6
+03D5   0008           01264     RETURN
+                      01265 
+03D6                  01266 USB_DISK_MOUNT
+03D6   1305           01267     BCF PORTA, 6
+03D7   3031           01268     MOVLW H'31'
+03D8   00??           01269     MOVWF DREG
+03D9   2???           01270     CALL SPI_TRANSFER
+03DA   1705           01271     BSF PORTA, 6
+03DB   0008           01272     RETURN
+                      01273 
+03DC                  01274 USB_DISK_CONNECT
+03DC   1305           01275     BCF PORTA, 6
+03DD   3030           01276     MOVLW H'30'
+03DE   00??           01277     MOVWF DREG
+03DF   2???           01278     CALL SPI_TRANSFER
+03E0   1705           01279     BSF PORTA, 6
+03E1   0008           01280     RETURN
+                      01281 
+03E2                  01282 USB_SET_MODE_5
+03E2   1305           01283     BCF PORTA, 6
+03E3   3015           01284     MOVLW H'15'
+03E4   00??           01285     MOVWF DREG
+03E5   2???           01286     CALL SPI_TRANSFER
+03E6   3005           01287     MOVLW H'05'
+03E7   00??           01288     MOVWF DREG
+03E8   2???           01289     CALL SPI_TRANSFER
+03E9   1705           01290     BSF PORTA, 6
+03EA   0008           01291     RETURN
+MPASM  5.43                          MAIN.ASM   5-8-2020  18:39:39         PAGE 26
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+
+                      01292 
+03EB                  01293 USB_SET_MODE_6
+03EB   1305           01294     BCF PORTA, 6
+03EC   3015           01295     MOVLW H'15'
+03ED   00??           01296     MOVWF DREG
+03EE   2???           01297     CALL SPI_TRANSFER
+03EF   3006           01298     MOVLW H'06'
+03F0   00??           01299     MOVWF DREG
+03F1   2???           01300     CALL SPI_TRANSFER
+03F2   1705           01301     BSF PORTA, 6
+03F3   0008           01302     RETURN
+                      01303 
+03F4                  01304 USB_SET_MODE_7
+03F4   1305           01305     BCF PORTA, 6
+03F5   3015           01306     MOVLW H'15'
+03F6   00??           01307     MOVWF DREG
+03F7   2???           01308     CALL SPI_TRANSFER
+03F8   3007           01309     MOVLW H'07'
+03F9   00??           01310     MOVWF DREG
+03FA   2???           01311     CALL SPI_TRANSFER
+03FB   1705           01312     BSF PORTA, 6
+03FC   0008           01313     RETURN
+                      01314 
+03FD                  01315 USB_GET_VERSION
+03FD   1305           01316     BCF PORTA, 6
+03FE   3001           01317     MOVLW H'01'
+03FF   00??           01318     MOVWF DREG
+0400   2???           01319     CALL SPI_TRANSFER
+0401   01??           01320     CLRF DREG
+0402   2???           01321     CALL SPI_TRANSFER
+0403   1705           01322     BSF PORTA, 6
+0404   0008           01323     RETURN
+                      01324 
+0405                  01325 USB_WAIT_STATUS
+0405   0A??           01326     INCF TIMEOUT_HIGH, F
+0406   0A??           01327     INCF TIMEOUT_LOW, F
+0407                  01328 UWS_LOOP
+0407   3001           01329     MOVLW H'01'
+0408   00??           01330     MOVWF DELAY_COUNTER
+0409   2???           01331     CALL DELAY_MILLIS   ;DELAY 1 MILLISECOND
+040A   2???           01332     CALL USB_GET_STATUS
+040B   08??           01333     MOVF USB_TARGET_STATUS, W
+040C   06??           01334     XORWF DREG, F
+040D   1903           01335     BTFSC STATUS, Z
+040E   0008           01336     RETURN
+040F   0B??           01337     DECFSZ TIMEOUT_LOW, F
+0410   2???           01338     GOTO UWS_LOOP
+0411   0B??           01339     DECFSZ TIMEOUT_HIGH, F
+0412   2???           01340     GOTO UWS_LOOP
+0413   1500           01341     BSF FLAG_REG, 2    ;SET FLAG TO INDICATE A TIMEOUT
+0414   0008           01342     RETURN
+                      01343 
+0415                  01344 USB_DISK_CAPACITY
+MPASM  5.43                          MAIN.ASM   5-8-2020  18:39:39         PAGE 27
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+
+0415   1305           01345     BCF PORTA, 6
+0416   303E           01346     MOVLW H'3E'
+0417   00??           01347     MOVWF DREG
+0418   2???           01348     CALL SPI_TRANSFER   ;SEND DISK CAPACITY COMMAND
+0419   1705           01349     BSF PORTA, 6
+041A   3014           01350     MOVLW H'14'
+041B   00??           01351     MOVWF USB_TARGET_STATUS ;SET TARGET STATUS TO 14 (DEVICE READY)
+041C   01??           01352     CLRF TIMEOUT_HIGH
+041D   3010           01353     MOVLW H'10'
+041E   00??           01354     MOVWF TIMEOUT_LOW   ;SET TIMEOUT TO 16 MILLISECONDS
+041F   2???           01355     CALL USB_WAIT_STATUS
+0420   1305           01356     BCF PORTA, 6
+0421   3027           01357     MOVLW H'27'
+0422   00??           01358     MOVWF DREG
+0423   2???           01359     CALL SPI_TRANSFER   ;SEND READ DATA0 COMMAND
+0424   01??           01360     CLRF DREG
+0425   2???           01361     CALL SPI_TRANSFER   ;GET NUMBER OF BYTES TO READ (ALWAYS 4)
+0426   01??           01362     CLRF DREG
+0427   2???           01363     CALL SPI_TRANSFER   ;GET LSB OF DISK SIZE
+                      01364 ;THE DISK SIZE IS GIVEN IN SECTORS, SO TO GET THE NUMBER OF BYTES WE MULTIPLY BY 512 WHICH IS THE SAME A
+                            S SHIFTING BY 9
+                      01365 ;THIS MEANS THE LSB IS ALWAYS ZERO AND THERE IS NO NEED TO HAVE A REGISTER FOR IT.
+                      01366 ;INSTEAD WE PUT THE LSB IN USB_DRIVE_SIZE1 WHICH CORRESPONDS TO SHIFTING BY 8.
+0428   08??           01367     MOVF DREG, W
+0429   00??           01368     MOVWF USB_DRIVE_SIZE1
+042A   01??           01369     CLRF DREG
+042B   2???           01370     CALL SPI_TRANSFER
+042C   08??           01371     MOVF DREG, W
+042D   00??           01372     MOVWF USB_DRIVE_SIZE2
+042E   01??           01373     CLRF DREG
+042F   2???           01374     CALL SPI_TRANSFER
+0430   08??           01375     MOVF DREG, W
+0431   00??           01376     MOVWF USB_DRIVE_SIZE3
+0432   01??           01377     CLRF DREG
+0433   2???           01378     CALL SPI_TRANSFER
+0434   1705           01379     BSF PORTA, 6
+0435   1003           01380     BCF STATUS, C   ;CLEAR CARRY FLAG
+0436   0D??           01381     RLF USB_DRIVE_SIZE1, F
+0437   0D??           01382     RLF USB_DRIVE_SIZE2, F
+0438   0D??           01383     RLF USB_DRIVE_SIZE3, F
+0439   0008           01384     RETURN
+                      01385 
+043A                  01386 USB_DISK_QUERY
+043A   1305           01387     BCF PORTA, 6
+043B   303E           01388     MOVLW H'3E'
+043C   00??           01389     MOVWF DREG
+043D   2???           01390     CALL SPI_TRANSFER   ;SEND DISK CAPACITY COMMAND
+043E   1705           01391     BSF PORTA, 6
+043F   3014           01392     MOVLW H'14'
+0440   00??           01393     MOVWF USB_TARGET_STATUS ;SET TARGET STATUS TO 14 (DEVICE READY)
+0441   01??           01394     CLRF TIMEOUT_HIGH
+0442   3010           01395     MOVLW H'10'
+0443   00??           01396     MOVWF TIMEOUT_LOW   ;SET TIMEOUT TO 16 MILLISECONDS
+MPASM  5.43                          MAIN.ASM   5-8-2020  18:39:39         PAGE 28
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+
+0444   2???           01397     CALL USB_WAIT_STATUS
+0445   1305           01398     BCF PORTA, 6
+0446   3027           01399     MOVLW H'27'
+0447   00??           01400     MOVWF DREG
+0448   2???           01401     CALL SPI_TRANSFER   ;SEND READ DATA0 COMMAND
+0449   01??           01402     CLRF DREG
+044A   2???           01403     CALL SPI_TRANSFER   ;GET NUMBER OF BYTES TO READ (ALWAYS 8)
+044B   01??           01404     CLRF DREG
+044C   2???           01405     CALL SPI_TRANSFER   ;GET LSB OF LOGICAL BYTES
+044D   08??           01406     MOVF DREG, W
+044E   00??           01407     MOVWF USB_LOGICAL_BYTES1
+044F   01??           01408     CLRF DREG
+0450   2???           01409     CALL SPI_TRANSFER
+0451   08??           01410     MOVF DREG, W
+0452   00??           01411     MOVWF USB_LOGICAL_BYTES2
+0453   01??           01412     CLRF DREG
+0454   2???           01413     CALL SPI_TRANSFER
+0455   08??           01414     MOVF DREG, W
+0456   00??           01415     MOVWF USB_LOGICAL_BYTES3
+0457   01??           01416     CLRF DREG
+0458   2???           01417     CALL SPI_TRANSFER   ;DISCARD MSB OF LOGICAL BYTES
+0459   01??           01418     CLRF DREG
+045A   2???           01419     CALL SPI_TRANSFER   ;GET LSB OF FREE SPACE
+045B   08??           01420     MOVF DREG, W
+045C   00??           01421     MOVWF USB_FREE_SPACE1
+045D   01??           01422     CLRF DREG
+045E   2???           01423     CALL SPI_TRANSFER
+045F   08??           01424     MOVF DREG, W
+0460   00??           01425     MOVWF USB_FREE_SPACE2
+0461   01??           01426     CLRF DREG
+0462   2???           01427     CALL SPI_TRANSFER
+0463   08??           01428     MOVF DREG, W
+0464   00??           01429     MOVWF USB_FREE_SPACE3
+0465   01??           01430     CLRF DREG
+0466   2???           01431     CALL SPI_TRANSFER   ;DISCARD MSB OF FREE SPACE
+0467   1705           01432     BSF PORTA, 6
+0468   1003           01433     BCF STATUS, C
+0469   0D??           01434     RLF USB_LOGICAL_BYTES1, F
+046A   0D??           01435     RLF USB_LOGICAL_BYTES2, F
+046B   0D??           01436     RLF USB_LOGICAL_BYTES3, F
+046C   1003           01437     BCF STATUS, C
+046D   0D??           01438     RLF USB_FREE_SPACE1, F
+046E   0D??           01439     RLF USB_FREE_SPACE2, F
+046F   0D??           01440     RLF USB_FREE_SPACE3, F
+0470   0008           01441     RETURN
+                      01442 
+0471                  01443 USB_WRITE_TEST_DATA
+0471   01??           01444     CLRF S_REG_LOW
+0472   01??           01445     CLRF S_REG_HIGH
+0473   1000           01446     BCF FLAG_REG, 0 ;INITIALIZE PSUEDO-RANDOM DATA GENERATOR
+0474   2???           01447     CALL USB_FILE_CREATE
+0475   30B8           01448     MOVLW H'B8'
+0476   00??           01449     MOVWF TIMEOUT_LOW
+MPASM  5.43                          MAIN.ASM   5-8-2020  18:39:39         PAGE 29
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+
+0477   300B           01450     MOVLW H'0B'
+0478   00??           01451     MOVWF TIMEOUT_HIGH  ;SET TIMEOUT TO 3 SECONDS
+0479   3014           01452     MOVLW H'14'
+047A   00??           01453     MOVWF USB_TARGET_STATUS ;SET TARGET STATUS TO 0x14
+047B   2???           01454     CALL USB_WAIT_STATUS
+047C   3004           01455     MOVLW H'04'
+047D   00??           01456     MOVWF GEN_COUNT6
+047E                  01457 UWTD_L4
+047E   01??           01458     CLRF USB_BYTES_SENT_HIGH
+047F   01??           01459     CLRF USB_BYTES_SENT_LOW
+0480   3080           01460     MOVLW H'80'
+0481   00??           01461     MOVWF USB_FILE_SIZE_HIGH
+0482   01??           01462     CLRF USB_FILE_SIZE_LOW
+0483   2???           01463     CALL USB_BYTE_WRITE
+0484   300B           01464     MOVLW H'0B'
+0485   00??           01465     MOVWF TIMEOUT_HIGH
+0486   30B8           01466     MOVLW H'B8'
+0487   00??           01467     MOVWF TIMEOUT_LOW
+0488   301E           01468     MOVLW H'1E'
+0489   00??           01469     MOVWF USB_TARGET_STATUS
+048A   2???           01470     CALL USB_WAIT_STATUS
+048B                  01471 UWTD_ND_LOOP
+048B   1305           01472     BCF PORTA, 6
+048C   302D           01473     MOVLW H'2D'
+048D   00??           01474     MOVWF DREG
+048E   2???           01475     CALL SPI_TRANSFER   ;SEND WR_REQ_DATA
+048F   01??           01476     CLRF DREG
+0490   2???           01477     CALL SPI_TRANSFER   ;GET NUMBER OF BYTES TO SEND
+0491   08??           01478     MOVF DREG, W
+0492   00??           01479     MOVWF GEN_COUNT5
+0493                  01480 UWTD_WR_LOOP
+0493   2???           01481     CALL GET_TEST_BYTE
+0494   2???           01482     CALL SPI_TRANSFER
+0495   0F??           01483     INCFSZ USB_BYTES_SENT_LOW, F
+0496   03??           01484     DECF USB_BYTES_SENT_HIGH, F
+0497   0A??           01485     INCF USB_BYTES_SENT_HIGH, F
+0498   08??           01486     MOVF USB_BYTES_SENT_HIGH, W
+0499   06??           01487     XORWF USB_FILE_SIZE_HIGH, W
+049A   1D03           01488     BTFSS STATUS, Z
+049B   2???           01489     GOTO UWTD_NB
+049C   08??           01490     MOVF USB_BYTES_SENT_LOW, W
+049D   06??           01491     XORWF USB_FILE_SIZE_LOW, W
+049E   1903           01492     BTFSC STATUS, Z
+049F   2???           01493     GOTO UWTD_BREAK
+04A0                  01494 UWTD_NB
+04A0   0B??           01495     DECFSZ GEN_COUNT5, F
+04A1   2???           01496     GOTO UWTD_WR_LOOP
+04A2                  01497 UWTD_BREAK
+04A2   1705           01498     BSF PORTA, 6
+04A3   300B           01499     MOVLW H'0B'
+04A4   00??           01500     MOVWF TIMEOUT_HIGH
+04A5   30B8           01501     MOVLW H'B8'
+04A6   00??           01502     MOVWF TIMEOUT_LOW
+MPASM  5.43                          MAIN.ASM   5-8-2020  18:39:39         PAGE 30
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+
+04A7   301E           01503     MOVLW H'1E'
+04A8   00??           01504     MOVWF USB_TARGET_STATUS
+04A9   2???           01505     CALL USB_WAIT_STATUS
+04AA   08??           01506     MOVF USB_BYTES_SENT_HIGH, W
+04AB   06??           01507     XORWF USB_FILE_SIZE_HIGH, W
+04AC   1D03           01508     BTFSS STATUS, Z
+04AD   2???           01509     GOTO UWTD_NE
+04AE   08??           01510     MOVF USB_BYTES_SENT_LOW, W
+04AF   06??           01511     XORWF USB_FILE_SIZE_LOW, W
+04B0   1903           01512     BTFSC STATUS, Z
+04B1   2???           01513     GOTO UWTD_EQUAL
+04B2                  01514 UWTD_NE
+04B2   2???           01515     CALL USB_BYTE_WR_GO
+04B3   300B           01516     MOVLW H'0B'
+04B4   00??           01517     MOVWF TIMEOUT_HIGH
+04B5   30B8           01518     MOVLW H'B8'
+04B6   00??           01519     MOVWF TIMEOUT_LOW
+04B7   301E           01520     MOVLW H'1E'
+04B8   00??           01521     MOVWF USB_TARGET_STATUS
+04B9   2???           01522     CALL USB_WAIT_STATUS
+04BA   2???           01523     GOTO UWTD_ND_LOOP
+04BB                  01524 UWTD_EQUAL
+04BB   2???           01525     CALL USB_BYTE_WR_GO
+04BC   300B           01526     MOVLW H'0B'
+04BD   00??           01527     MOVWF TIMEOUT_HIGH
+04BE   30B8           01528     MOVLW H'B8'
+04BF   00??           01529     MOVWF TIMEOUT_LOW
+04C0   3014           01530     MOVLW H'14'
+04C1   00??           01531     MOVWF USB_TARGET_STATUS
+04C2   2???           01532     CALL USB_WAIT_STATUS
+04C3   0B??           01533     DECFSZ GEN_COUNT6, F
+04C4   2???           01534     GOTO UWTD_L4
+04C5   2???           01535     CALL USB_FILE_CLOSE
+04C6   300B           01536     MOVLW H'0B'
+04C7   00??           01537     MOVWF TIMEOUT_HIGH
+04C8   30B8           01538     MOVLW H'B8'
+04C9   00??           01539     MOVWF TIMEOUT_LOW
+04CA   3014           01540     MOVLW H'14'
+04CB   00??           01541     MOVWF USB_TARGET_STATUS
+04CC   2???           01542     CALL USB_WAIT_STATUS
+04CD   0008           01543     RETURN
+                      01544 
+04CE                  01545 USB_FILE_WRITE
+04CE   2???           01546     CALL USB_SET_FILE_NAME
+04CF   3010           01547     MOVLW H'10'
+04D0   00??           01548     MOVWF TIMEOUT_LOW
+04D1   01??           01549     CLRF TIMEOUT_HIGH
+04D2   3014           01550     MOVLW H'14'
+04D3   00??           01551     MOVWF USB_TARGET_STATUS
+04D4   2???           01552     CALL USB_WAIT_STATUS
+04D5   2???           01553     CALL USB_FILE_CREATE
+04D6   30B8           01554     MOVLW H'B8'
+04D7   00??           01555     MOVWF TIMEOUT_LOW
+MPASM  5.43                          MAIN.ASM   5-8-2020  18:39:39         PAGE 31
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+
+04D8   300B           01556     MOVLW H'0B'
+04D9   00??           01557     MOVWF TIMEOUT_HIGH  ;SET TIMEOUT TO 3 SECONDS
+04DA   3014           01558     MOVLW H'14'
+04DB   00??           01559     MOVWF USB_TARGET_STATUS ;SET TARGET STATUS TO 0x14
+04DC   2???           01560     CALL USB_WAIT_STATUS
+04DD   01??           01561     CLRF USB_BYTES_SENT_HIGH
+04DE   01??           01562     CLRF USB_BYTES_SENT_LOW
+04DF   08??           01563     MOVF TAPE_SIZE_HIGH, W
+04E0   00??           01564     MOVWF USB_FILE_SIZE_HIGH
+04E1   08??           01565     MOVF TAPE_SIZE_LOW, W
+04E2   00??           01566     MOVWF USB_FILE_SIZE_LOW
+04E3   2???           01567     CALL USB_BYTE_WRITE
+04E4   300B           01568     MOVLW H'0B'
+04E5   00??           01569     MOVWF TIMEOUT_HIGH
+04E6   30B8           01570     MOVLW H'B8'
+04E7   00??           01571     MOVWF TIMEOUT_LOW
+04E8   301E           01572     MOVLW H'1E'
+04E9   00??           01573     MOVWF USB_TARGET_STATUS
+04EA   2???           01574     CALL USB_WAIT_STATUS
+04EB                  01575 UFW_ND_LOOP
+04EB   2???           01576     CALL BUFF_INIT
+04EC   08??           01577     MOVF USB_BYTES_SENT_LOW, W
+04ED   00??           01578     MOVWF RAM_ADDRESS_L
+04EE   08??           01579     MOVF USB_BYTES_SENT_HIGH, W
+04EF   00??           01580     MOVWF RAM_ADDRESS_H
+04F0   03??           01581     DECF RAM_ADDRESS_L, F
+04F1   1C03           01582     BTFSS STATUS, C
+04F2   03??           01583     DECF RAM_ADDRESS_H, F
+04F3   2???           01584     CALL BUFF_FILL
+04F4   1305           01585     BCF PORTA, 6
+04F5   302D           01586     MOVLW H'2D'
+04F6   00??           01587     MOVWF DREG
+04F7   2???           01588     CALL SPI_TRANSFER   ;SEND WR_REQ_DATA
+04F8   01??           01589     CLRF DREG
+04F9   2???           01590     CALL SPI_TRANSFER   ;GET NUMBER OF BYTES TO SEND
+04FA   08??           01591     MOVF DREG, W
+04FB   00??           01592     MOVWF GEN_COUNT5
+04FC                  01593 UFW_WR_LOOP
+04FC   2???           01594     CALL BUFF_READ_AUTO
+04FD   2???           01595     CALL SPI_TRANSFER
+04FE   0F??           01596     INCFSZ USB_BYTES_SENT_LOW, F
+04FF   03??           01597     DECF USB_BYTES_SENT_HIGH, F
+0500   0A??           01598     INCF USB_BYTES_SENT_HIGH, F
+0501   08??           01599     MOVF USB_BYTES_SENT_HIGH, W
+0502   06??           01600     XORWF USB_FILE_SIZE_HIGH, W
+0503   1D03           01601     BTFSS STATUS, Z
+0504   2???           01602     GOTO UFW_NB
+0505   08??           01603     MOVF USB_BYTES_SENT_LOW, W
+0506   06??           01604     XORWF USB_FILE_SIZE_LOW, W
+0507   1903           01605     BTFSC STATUS, Z
+0508   2???           01606     GOTO UFW_BREAK
+0509                  01607 UFW_NB
+0509   0B??           01608     DECFSZ GEN_COUNT5, F
+MPASM  5.43                          MAIN.ASM   5-8-2020  18:39:39         PAGE 32
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+
+050A   2???           01609     GOTO UFW_WR_LOOP
+050B                  01610 UFW_BREAK
+050B   1705           01611     BSF PORTA, 6
+050C   300B           01612     MOVLW H'0B'
+050D   00??           01613     MOVWF TIMEOUT_HIGH
+050E   30B8           01614     MOVLW H'B8'
+050F   00??           01615     MOVWF TIMEOUT_LOW
+0510   301E           01616     MOVLW H'1E'
+0511   00??           01617     MOVWF USB_TARGET_STATUS
+0512   2???           01618     CALL USB_WAIT_STATUS
+0513   08??           01619     MOVF USB_BYTES_SENT_HIGH, W
+0514   06??           01620     XORWF USB_FILE_SIZE_HIGH, W
+0515   1D03           01621     BTFSS STATUS, Z
+0516   2???           01622     GOTO UFW_NE
+0517   08??           01623     MOVF USB_BYTES_SENT_LOW, W
+0518   06??           01624     XORWF USB_FILE_SIZE_LOW, W
+0519   1903           01625     BTFSC STATUS, Z
+051A   2???           01626     GOTO UFW_EQUAL
+051B                  01627 UFW_NE
+051B   2???           01628     CALL USB_BYTE_WR_GO
+051C   300B           01629     MOVLW H'0B'
+051D   00??           01630     MOVWF TIMEOUT_HIGH
+051E   30B8           01631     MOVLW H'B8'
+051F   00??           01632     MOVWF TIMEOUT_LOW
+0520   301E           01633     MOVLW H'1E'
+0521   00??           01634     MOVWF USB_TARGET_STATUS
+0522   2???           01635     CALL USB_WAIT_STATUS
+0523   2???           01636     GOTO UFW_ND_LOOP
+0524                  01637 UFW_EQUAL
+0524   2???           01638     CALL USB_BYTE_WR_GO
+0525   300B           01639     MOVLW H'0B'
+0526   00??           01640     MOVWF TIMEOUT_HIGH
+0527   30B8           01641     MOVLW H'B8'
+0528   00??           01642     MOVWF TIMEOUT_LOW
+0529   3014           01643     MOVLW H'14'
+052A   00??           01644     MOVWF USB_TARGET_STATUS
+052B   2???           01645     CALL USB_WAIT_STATUS
+052C   2???           01646     CALL USB_FILE_CLOSE
+052D   300B           01647     MOVLW H'0B'
+052E   00??           01648     MOVWF TIMEOUT_HIGH
+052F   30B8           01649     MOVLW H'B8'
+0530   00??           01650     MOVWF TIMEOUT_LOW
+0531   3014           01651     MOVLW H'14'
+0532   00??           01652     MOVWF USB_TARGET_STATUS
+0533   2???           01653     CALL USB_WAIT_STATUS
+0534   0008           01654     RETURN
+                      01655 
+0535                  01656 USB_FILE_READ
+0535   30FF           01657     MOVLW H'FF'
+0536   00??           01658     MOVWF RAM_ADDRESS_H
+0537   00??           01659     MOVWF RAM_ADDRESS_L ;RAM ADDRESS WILL OVERFLOW BEFORE FIRST WRITE
+0538   2???           01660     CALL USB_BYTE_READ
+0539   01??           01661     CLRF TIMEOUT_HIGH
+MPASM  5.43                          MAIN.ASM   5-8-2020  18:39:39         PAGE 33
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+
+053A   3080           01662     MOVLW H'80'
+053B   00??           01663     MOVWF TIMEOUT_LOW
+053C   301D           01664     MOVLW H'1D'
+053D   00??           01665     MOVWF USB_TARGET_STATUS
+053E   2???           01666     CALL USB_WAIT_STATUS
+053F   1D00           01667     BTFSS FLAG_REG, 2   ;CHECK TIMEOUT FLAG
+0540   2???           01668     GOTO TIMEOUT_ERROR
+0541                  01669 UFR_LOOP
+0541   2???           01670     CALL USB_READ_DATA0
+0542   3001           01671     MOVLW H'01'
+0543   00??           01672     MOVWF DELAY_COUNTER
+0544   2???           01673     CALL DELAY_MILLIS
+0545   08??           01674     MOVF USB_FILE_SIZE_LOW, W
+0546   06??           01675     XORWF USB_BYTES_READ_LOW, W
+0547   1D03           01676     BTFSS STATUS, Z
+0548   2???           01677     GOTO UFR_GO
+0549   08??           01678     MOVF USB_FILE_SIZE_HIGH, W
+054A   06??           01679     XORWF USB_BYTES_READ_HIGH, W
+054B   1903           01680     BTFSC STATUS, Z
+054C   2???           01681     GOTO UFR_DONE
+054D                  01682 UFR_GO
+054D   2???           01683     CALL USB_BYTE_READ_GO
+054E   01??           01684     CLRF TIMEOUT_HIGH
+054F   30FF           01685     MOVLW H'FF'
+0550   00??           01686     MOVWF TIMEOUT_LOW
+0551   301D           01687     MOVLW H'1D'
+0552   00??           01688     MOVWF USB_TARGET_STATUS
+0553   2???           01689     CALL USB_WAIT_STATUS
+0554   2???           01690     GOTO UFR_LOOP
+0555                  01691 UFR_DONE
+0555   08??           01692     MOVF USB_FILE_SIZE_LOW, W
+0556   00??           01693     MOVWF TAPE_SIZE_LOW
+0557   08??           01694     MOVF USB_FILE_SIZE_HIGH, W
+0558   00??           01695     MOVWF TAPE_SIZE_HIGH
+0559   1305           01696     BCF PORTA, 6
+055A   3036           01697     MOVLW H'36'
+055B   00??           01698     MOVWF DREG
+055C   2???           01699     CALL SPI_TRANSFER   ;SEND FILE CLOSE COMMAND
+055D   01??           01700     CLRF DREG
+055E   2???           01701     CALL SPI_TRANSFER   ;FILE CLOSE PARAMETER IS 0 (DO NOT UPDATE FILE SIZE)
+055F   1705           01702     BSF PORTA, 6
+0560   01??           01703     CLRF TIMEOUT_HIGH
+0561   3080           01704     MOVLW H'80'
+0562   00??           01705     MOVWF TIMEOUT_LOW
+0563   3014           01706     MOVLW H'14'
+0564   00??           01707     MOVWF USB_TARGET_STATUS
+0565   2???           01708     CALL USB_WAIT_STATUS
+0566   0008           01709     RETURN
+                      01710 
+0567                  01711 TIMEOUT_ERROR
+0567   08??           01712     MOVF DREG, W
+0568   00??           01713     MOVWF TEMP2
+0569   01??           01714     CLRF GEN_COUNT2
+MPASM  5.43                          MAIN.ASM   5-8-2020  18:39:39         PAGE 34
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+
+056A   3004           01715     MOVLW H'04'
+056B   00??           01716     MOVWF STRING_ID
+056C   2???           01717     CALL PRINT_STRING_SERIAL
+056D   3020           01718     MOVLW H'20' ;SPACE CHAR
+056E   00??           01719     MOVWF DREG
+056F   2???           01720     CALL UART_SEND
+0570   08??           01721     MOVF USB_TARGET_STATUS, W
+0571   00??           01722     MOVWF DREG
+0572   2???           01723     CALL BYTE_TO_HEX
+0573   08??           01724     MOVF HEX_CHAR_HIGH, W
+0574   00??           01725     MOVWF DREG
+0575   2???           01726     CALL UART_SEND
+0576   08??           01727     MOVF HEX_CHAR_LOW, W
+0577   00??           01728     MOVWF DREG
+0578   2???           01729     CALL UART_SEND
+0579   300A           01730     MOVLW H'0A' ;NEW LINE CHAR
+057A   00??           01731     MOVWF DREG
+057B   2???           01732     CALL UART_SEND
+057C   08??           01733     MOVF TEMP2, W
+057D   00??           01734     MOVWF DREG
+057E   0008           01735     RETURN
+                      01736 
+057F                  01737 BUFF_INIT
+057F   1383           01738     BCF STATUS, IRP    ;SWITCH TO BANKS 0 AND 1
+0580   30A0           01739     MOVLW H'A0' ;SWITCH TO BANK 1
+0581   0084           01740     MOVWF FSR
+0582   0008           01741     RETURN
+                      01742 
+0583                  01743 BUFF_FILL
+0583   01??           01744     CLRF GEN_COUNT6
+0584                  01745 BUFF_FILL_LOOP
+0584   2???           01746     CALL RAM_READ_AUTO
+0585   2???           01747     CALL BUFF_WRITE_AUTO
+0586   0B??           01748     DECFSZ GEN_COUNT6, F
+0587   2???           01749     GOTO BUFF_FILL_LOOP
+0588   0008           01750     RETURN
+                      01751 
+0589                  01752 BUFF_WRITE_AUTO
+0589   08??           01753     MOVF DREG, W
+058A   0080           01754     MOVWF INDF
+058B   2???           01755     GOTO BUFR_INC
+058C                  01756 BUFF_READ_AUTO
+058C   0800           01757     MOVF INDF, W
+058D   00??           01758     MOVWF DREG
+058E                  01759 BUFR_INC
+058E   0A84           01760     INCF FSR, F
+058F   0804           01761     MOVF FSR, W
+0590   397F           01762     ANDLW H'7F'
+0591   3A70           01763     XORLW H'70'
+0592   1D03           01764     BTFSS STATUS, Z
+0593   0008           01765     RETURN
+0594   1B84           01766     BTFSC FSR, 7
+0595   2???           01767     GOTO BUFR_ODD
+MPASM  5.43                          MAIN.ASM   5-8-2020  18:39:39         PAGE 35
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+
+0596                  01768 BUFR_EVEN
+0596   1B83           01769     BTFSC STATUS, IRP
+0597   2???           01770     GOTO BUFR_B2
+0598                  01771 BUFR_B0
+0598   2???           01772     GOTO BUILD_PANIC ;THIS FUNCTION SHOULD NEVER READ BANK 0!
+0599                  01773 BUFR_B2
+0599   3090           01774     MOVLW H'90' ;IRP ALREADY SET, SWITCH TO ODD BANKS
+059A   0084           01775     MOVWF FSR
+059B   0008           01776     RETURN
+059C                  01777 BUFR_ODD
+059C   1B83           01778     BTFSC STATUS, IRP
+059D   2???           01779     GOTO BUFR_B3
+059E                  01780 BUFR_B1
+059E   1783           01781     BSF STATUS, IRP ;SWITCH TO BANKS 2 AND 3
+059F   3010           01782     MOVLW H'10' ;SWITCH TO EVEN BANKS
+05A0   0084           01783     MOVWF FSR
+05A1   0008           01784     RETURN
+05A2                  01785 BUFR_B3
+05A2   1383           01786     BCF STATUS, IRP ;SWITCH TO BANKS 0 AND 1
+05A3   30A0           01787     MOVLW H'A0' ;SWITCH TO BANK 1
+05A4   0084           01788     MOVWF FSR
+05A5   0008           01789     RETURN
+                      01790 
+                      01791 STRINGS CODE H'0800' ;STRINGS AND TABLES
+0800                  01792 STRING_TABLE
+0800   08??           01793     MOVF STRING_ID, W
+0801   0782           01794     ADDWF PCL, F
+0802   2???           01795     GOTO HOME_STRING    ;ID0
+0803   2???           01796     GOTO LOAD_STRING    ;ID1
+0804   2???           01797     GOTO SAVE_STRING    ;ID2
+0805   2???           01798     GOTO SEND_STRING    ;ID3
+0806   2???           01799     GOTO TIMEOUT_STRING ;ID4
+0807   2???           01800     GOTO NEXT_STRING    ;ID5
+0808   2???           01801     GOTO BACK_STRING    ;ID6
+                      01802 
+0809                  01803 HOME_STRING
+0809   08??           01804     MOVF STRING_INDEX, W
+080A   0782           01805     ADDWF PCL,F
+080B   3454           01806     RETLW 'T'
+080C   3441           01807     RETLW 'A'
+080D   3450           01808     RETLW 'P'
+080E   3445           01809     RETLW 'E'
+080F   3420           01810     RETLW ' '
+0810   3452           01811     RETLW 'R'
+0811   3445           01812     RETLW 'E'
+0812   3441           01813     RETLW 'A'
+0813   3444           01814     RETLW 'D'
+0814   3459           01815     RETLW 'Y'
+0815   342E           01816     RETLW '.'
+0816   3400           01817     RETLW H'00'
+                      01818 
+0817                  01819 LOAD_STRING
+0817   08??           01820     MOVF STRING_INDEX, W
+MPASM  5.43                          MAIN.ASM   5-8-2020  18:39:39         PAGE 36
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+
+0818   0782           01821     ADDWF PCL,F
+0819   344C           01822     RETLW 'L'
+081A   344F           01823     RETLW 'O'
+081B   3441           01824     RETLW 'A'
+081C   3444           01825     RETLW 'D'
+081D   3400           01826     RETLW H'00'
+                      01827 
+081E                  01828 SAVE_STRING
+081E   08??           01829     MOVF STRING_INDEX, W
+081F   0782           01830     ADDWF PCL,F
+0820   3453           01831     RETLW 'S'
+0821   3441           01832     RETLW 'A'
+0822   3456           01833     RETLW 'V'
+0823   3445           01834     RETLW 'E'
+0824   3400           01835     RETLW H'00'
+                      01836 
+0825                  01837 SEND_STRING
+0825   08??           01838     MOVF STRING_INDEX, W
+0826   0782           01839     ADDWF PCL, F
+0827   3453           01840     RETLW 'S'
+0828   3445           01841     RETLW 'E'
+0829   344E           01842     RETLW 'N'
+082A   3444           01843     RETLW 'D'
+082B   3400           01844     RETLW H'00'
+                      01845 
+082C                  01846 TIMEOUT_STRING
+082C   08??           01847     MOVF STRING_INDEX, W
+082D   0782           01848     ADDWF PCL, F
+082E   3454           01849     RETLW 'T'
+082F   3449           01850     RETLW 'I'
+0830   344D           01851     RETLW 'M'
+0831   3445           01852     RETLW 'E'
+0832   344F           01853     RETLW 'O'
+0833   3455           01854     RETLW 'U'
+0834   3454           01855     RETLW 'T'
+0835   343A           01856     RETLW ':'
+0836   3400           01857     RETLW H'00'
+                      01858 
+0837                  01859 NEXT_STRING
+0837   08??           01860     MOVF STRING_INDEX, W
+0838   0782           01861     ADDWF PCL,F
+0839   344E           01862     RETLW 'N'
+083A   3445           01863     RETLW 'E'
+083B   3458           01864     RETLW 'X'
+083C   3454           01865     RETLW 'T'
+083D   3400           01866     RETLW H'00'
+                      01867 
+083E                  01868 BACK_STRING
+083E   08??           01869     MOVF STRING_INDEX, W
+083F   0782           01870     ADDWF PCL,F
+0840   3442           01871     RETLW 'B'
+0841   3441           01872     RETLW 'A'
+0842   3443           01873     RETLW 'C'
+MPASM  5.43                          MAIN.ASM   5-8-2020  18:39:39         PAGE 37
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+
+0843   344B           01874     RETLW 'K'
+0844   3400           01875     RETLW H'00'
+                      01876 
+0845                  01877 HEX_STRING
+0845   0782           01878     ADDWF PCL,F
+0846   3430           01879     RETLW '0'
+0847   3431           01880     RETLW '1'
+0848   3432           01881     RETLW '2'
+0849   3433           01882     RETLW '3'
+084A   3434           01883     RETLW '4'
+084B   3435           01884     RETLW '5'
+084C   3436           01885     RETLW '6'
+084D   3437           01886     RETLW '7'
+084E   3438           01887     RETLW '8'
+084F   3439           01888     RETLW '9'
+0850   3441           01889     RETLW 'A'
+0851   3442           01890     RETLW 'B'
+0852   3443           01891     RETLW 'C'
+0853   3444           01892     RETLW 'D'
+0854   3445           01893     RETLW 'E'
+0855   3446           01894     RETLW 'F'
+                      01895 
+                      01896 STRINGS2 CODE H'0900'
+                      01897 
+0900                  01898 SEND_232
+0900   1007           01899     BCF PORTC,0 ;SEND STARTING BIT
+0901   0000           01900     NOP
+0902   2???           01901     CALL FULLDELAY_232
+0903   1800           01902     BTFSC DREG,0 ;TEST FIRST BIT
+0904   1407           01903     BSF PORTC,0 ;IF SET IN REGISTER SET TX LINE
+0905   1C00           01904     BTFSS DREG,0 ;TEST FIRST BIT
+0906   1007           01905     BCF PORTC,0 ;IF CLEAR IN REGISTER CLEAR TX LINE
+0907   2???           01906     CALL TXDELAY_232
+0908   1880           01907     BTFSC DREG,1
+0909   1407           01908     BSF PORTC,0
+090A   1C80           01909     BTFSS DREG,1
+090B   1007           01910     BCF PORTC,0
+090C   2???           01911     CALL TXDELAY_232
+090D   1900           01912     BTFSC DREG,2
+090E   1407           01913     BSF PORTC,0
+090F   1D00           01914     BTFSS DREG,2
+0910   1007           01915     BCF PORTC,0
+0911   2???           01916     CALL TXDELAY_232
+0912   1980           01917     BTFSC DREG,3
+0913   1407           01918     BSF PORTC,0
+0914   1D80           01919     BTFSS DREG,3
+0915   1007           01920     BCF PORTC,0
+0916   2???           01921     CALL TXDELAY_232
+0917   1A00           01922     BTFSC DREG,4
+0918   1407           01923     BSF PORTC,0
+0919   1E00           01924     BTFSS DREG,4
+091A   1007           01925     BCF PORTC,0
+091B   2???           01926     CALL TXDELAY_232
+MPASM  5.43                          MAIN.ASM   5-8-2020  18:39:39         PAGE 38
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+
+091C   1A80           01927     BTFSC DREG,5
+091D   1407           01928     BSF PORTC,0
+091E   1E80           01929     BTFSS DREG,5
+091F   1007           01930     BCF PORTC,0
+0920   2???           01931     CALL TXDELAY_232
+0921   1B00           01932     BTFSC DREG,6
+0922   1407           01933     BSF PORTC,0
+0923   1F00           01934     BTFSS DREG,6
+0924   1007           01935     BCF PORTC,0
+0925   2???           01936     CALL TXDELAY_232
+0926   1B80           01937     BTFSC DREG,7
+0927   1407           01938     BSF PORTC,0
+0928   1F80           01939     BTFSS DREG,7
+0929   1007           01940     BCF PORTC,0
+092A   2???           01941     CALL TXDELAY_232
+092B   1407           01942     BSF PORTC,0 ;SEND STOP BIT
+092C   2???           01943     CALL FULLDELAY_232
+092D   0008           01944     RETURN
+                      01945 
+092E   01??           01946 RECEIVE     CLRF DREG    ;CLEAR REGISTER WHERE MESSAGE WILL BE STORED
+092F   1887           01947 WAIT_232    BTFSC PORTC,1
+0930   2???           01948             GOTO WAIT_232
+0931   2???           01949             CALL HALFDELAY_232
+0932   2???           01950             CALL FULLDELAY_232
+0933   1887           01951             BTFSC PORTC,1   ;CHECK FIRST BIT
+0934   1400           01952             BSF DREG,0
+0935   2???           01953             CALL FULLDELAY_232
+0936   1887           01954             BTFSC PORTC,1   ;CHECK BIT 1
+0937   1480           01955             BSF DREG,1
+0938   2???           01956             CALL FULLDELAY_232
+0939   1887           01957             BTFSC PORTC,1   ;CHECK BIT2
+093A   1500           01958             BSF DREG,2
+093B   2???           01959             CALL FULLDELAY_232
+093C   1887           01960             BTFSC PORTC,1   ;CHECK BIT 3
+093D   1580           01961             BSF DREG,3
+093E   2???           01962             CALL FULLDELAY_232
+093F   1887           01963             BTFSC PORTC,1   ;CHECK BIT 4
+0940   1600           01964             BSF DREG,4
+0941   2???           01965             CALL FULLDELAY_232
+0942   1887           01966             BTFSC PORTC,1   ;CHECK BIT 5
+0943   1680           01967             BSF DREG,5
+0944   2???           01968             CALL FULLDELAY_232
+0945   1887           01969             BTFSC PORTC,1   ;CHECK BIT 6
+0946   1700           01970             BSF DREG,6
+0947   2???           01971             CALL FULLDELAY_232
+0948   1887           01972             BTFSC PORTC,1   ;CHECK BIT 7
+0949   1780           01973             BSF DREG,7
+094A   2???           01974             CALL HALFDELAY_232  ;TO PREVENT FALSE TRIGGER
+094B   0008           01975             RETURN
+                      01976 
+094C                  01977 FULLDELAY_232   ;DESIGNED FOR 4MHZ CLOCK AND 2400 BAUD RATE
+094C   3052           01978             MOVLW 52H
+094D   00??           01979             MOVWF GEN_COUNT
+MPASM  5.43                          MAIN.ASM   5-8-2020  18:39:39         PAGE 39
+
+
+LOC  OBJECT CODE     LINE SOURCE TEXT
+  VALUE
+
+094E                  01980 FULLDELAY_2322
+094E   0000           01981             NOP
+094F   0000           01982             NOP
+0950   0B??           01983             DECFSZ GEN_COUNT,1
+0951   2???           01984             GOTO FULLDELAY_2322
+0952   0008           01985             RETURN
+0953                  01986 HALFDELAY_232   ;DESIGNED FOR 4MHZ CLOCK AND 2400 BAUD RATE
+0953   301D           01987             MOVLW 1DH
+0954   00??           01988             MOVWF GEN_COUNT
+0955                  01989 HALFDELAY_2322
+0955   0000           01990             NOP
+0956   0000           01991             NOP
+0957   0000           01992             NOP
+0958   0000           01993             NOP
+0959   0B??           01994             DECFSZ GEN_COUNT,1
+095A   2???           01995             GOTO HALFDELAY_2322
+095B   0008           01996             RETURN
+                      01997 
+095C   3066           01998 TXDELAY_232 MOVLW 66H
+095D   00A4           01999             MOVWF 24H
+095E                  02000 TXDELAY_2322
+095E   0000           02001             NOP ;DESIGNED FOR 4MHz CLOCK AND 2400 BAUD RATE
+095F   0BA4           02002             DECFSZ 24H,1
+0960   2???           02003             GOTO TXDELAY_2322
+0961   0008           02004             RETURN
+                      02005 
+0962                  02006 INT_TEST_START
+0962   0181           02007     CLRF TMR0
+0963   0000           02008     NOP
+0964   110B           02009     BCF INTCON, T0IF
+0965   178B           02010     BSF INTCON, GIE
+0966   0008           02011     RETURN
+                      02012 
+0967                  02013 INT_TEST_STOP
+0967   138B           02014     BCF INTCON, GIE
+0968   0008           02015     RETURN
+                      02016 
+3F23 3FBC             02017     END
+MPASM  5.43                          MAIN.ASM   5-8-2020  18:39:39         PAGE 40
+
+
+SYMBOL TABLE
+  LABEL                             VALUE 
+
+ACKDT                             00000005
+ACKEN                             00000004
+ACKSTAT                           00000006
+ACQT0                             00000003
+ACQT1                             00000004
+ACQT2                             00000005
+ADCON0                            0000001F
+ADCON1                            0000009F
+ADCON2                            0000009B
+ADCS0                             00000006
+ADCS1                             00000007
+ADCS2                             00000006
+ADDEN                             00000003
+ADFM                              00000007
+ADIE                              00000006
+ADIF                              00000006
+ADON                              00000000
+ADRESH                            0000001E
+ADRESL                            0000009E
+BACK_STRING                       0000083E
+BCLIE                             00000003
+BCLIF                             00000003
+BF                                00000000
+BIT_COUNT                         0000001A
+BLOCK_DATA_LOOP                   00000213
+BP_HALT                           0000024A
+BRGH                              00000002
+BUFFER_1                          00000000
+BUFFER_2                          00000000
+BUFFER_3                          00000000
+BUFF_FILL                         00000583
+BUFF_FILL_LOOP                    00000584
+BUFF_INIT                         0000057F
+BUFF_READ_AUTO                    0000058C
+BUFF_WRITE_AUTO                   00000589
+BUFR_B0                           00000598
+BUFR_B1                           0000059E
+BUFR_B2                           00000599
+BUFR_B3                           000005A2
+BUFR_EVEN                         00000596
+BUFR_INC                          0000058E
+BUFR_ODD                          0000059C
+BUILD_ALIGN                       0000021C
+BUILD_BYTE                        00000222
+BUILD_ERROR                       00000234
+BUILD_LOOP                        00000224
+BUILD_NO_ERROR                    00000237
+BUILD_PANIC                       00000247
+BUILD_WORD                        000002E7
+BUILD_WORD_LOOP                   000002E9
+BYTE_TO_HEX                       000002DC
+C                                 00000000
+C1INV                             00000004
+MPASM  5.43                          MAIN.ASM   5-8-2020  18:39:39         PAGE 41
+
+
+SYMBOL TABLE
+  LABEL                             VALUE 
+
+C1OUT                             00000006
+C2INV                             00000005
+C2OUT                             00000007
+CCP1CON                           00000017
+CCP1IE                            00000002
+CCP1IF                            00000002
+CCP1M0                            00000000
+CCP1M1                            00000001
+CCP1M2                            00000002
+CCP1M3                            00000003
+CCP1X                             00000005
+CCP1Y                             00000004
+CCP2CON                           0000001D
+CCP2IE                            00000000
+CCP2IF                            00000000
+CCP2M0                            00000000
+CCP2M1                            00000001
+CCP2M2                            00000002
+CCP2M3                            00000003
+CCP2X                             00000005
+CCP2Y                             00000004
+CCP3CON                           00000097
+CCP3IE                            00000001
+CCP3IF                            00000001
+CCP3M0                            00000000
+CCP3M1                            00000001
+CCP3M2                            00000002
+CCP3M3                            00000003
+CCP3X                             00000005
+CCP3Y                             00000004
+CCPR1                             00000015
+CCPR1H                            00000016
+CCPR1L                            00000015
+CCPR2                             0000001B
+CCPR2H                            0000001C
+CCPR2L                            0000001B
+CCPR3                             00000095
+CCPR3H                            00000096
+CCPR3L                            00000095
+CFS2                              00000331
+CFS3                              00000338
+CFS4                              00000341
+CHECK_FREE_SPACE                  00000329
+CHS0                              00000003
+CHS1                              00000004
+CHS2                              00000005
+CHS3                              00000001
+CIS                               00000003
+CKE                               00000006
+CKP                               00000004
+CLEARDISPLAY                      00000145
+CLLOOP40                          0000015A
+CM0                               00000000
+MPASM  5.43                          MAIN.ASM   5-8-2020  18:39:39         PAGE 42
+
+
+SYMBOL TABLE
+  LABEL                             VALUE 
+
+CM1                               00000001
+CM2                               00000002
+CMCON                             0000009C
+CMD_CLEARDISPLAY                  0000008C
+CMD_LCD_CLEAR1                    00000088
+CMD_LCD_CLEAR2                    0000008A
+CMD_LINE2                         00000086
+CMD_MEM_CLEAR                     00000095
+CMD_MEM_DUMP                      00000090
+CMD_PRINT_HOME                    00000092
+CMD_PRINT_NAME                    0000008E
+CMD_SETHOME                       00000084
+CMIE                              00000006
+CMIF                              00000006
+CREN                              00000004
+CSRC                              00000007
+CVR0                              00000000
+CVR1                              00000001
+CVR2                              00000002
+CVR3                              00000003
+CVRCON                            0000009D
+CVREN                             00000007
+CVROE                             00000006
+CVRR                              00000005
+D                                 00000005
+DATA_ADDRESS                      00000005
+DC                                00000001
+DELAY_COUNTER                     00000031
+DELAY_MILLIS                      00000300
+DISPLAYON                         0000013D
+DM_INNER                          00000304
+DM_OUTER                          00000302
+DREG                              00000000
+D_A                               00000005
+D_NOT_A                           00000005
+F                                 00000001
+FERR                              00000002
+FIRST_BLOCK_LOOP                  000001F6
+FLAG_REG                          00000034
+FSR                               00000004
+FULLDELAY_232                     0000094C
+FULLDELAY_2322                    0000094E
+FUNCTIONSET_LCD                   00000133
+GCEN                              00000007
+GEN_COUNT                         0000000A
+GEN_COUNT2                        0000000B
+GEN_COUNT3                        0000000C
+GEN_COUNT4                        0000000D
+GEN_COUNT5                        0000000E
+GEN_COUNT6                        0000000F
+GET_LEADER                        000001D5
+GET_TEST_BYTE                     000002F5
+GIE                               00000007
+MPASM  5.43                          MAIN.ASM   5-8-2020  18:39:39         PAGE 43
+
+
+SYMBOL TABLE
+  LABEL                             VALUE 
+
+GL_FIX                            000001DF
+GL_FIX2                           000001E2
+GO                                00000002
+GO_DONE                           00000002
+GO_NOT_DONE                       00000002
+GTB_UPDATE                        000002FB
+HALFDELAY_232                     00000953
+HALFDELAY_2322                    00000955
+HEX_CHAR_HIGH                     0000001B
+HEX_CHAR_LOW                      0000001C
+HEX_STRING                        00000845
+HOME_STRING                       00000809
+I2C_DATA                          00000005
+I2C_READ                          00000002
+I2C_START                         00000003
+I2C_STOP                          00000004
+IBF                               00000007
+IBOV                              00000005
+INDF                              00000000
+INITIALIZE                        00000005
+INT0IE                            00000004
+INT0IF                            00000001
+INTCON                            0000000B
+INTE                              00000004
+INTEDG                            00000006
+INTF                              00000001
+INT_TEST_START                    00000962
+INT_TEST_STOP                     00000967
+IOFS                              00000002
+IRCF0                             00000004
+IRCF1                             00000005
+IRCF2                             00000006
+IRP                               00000007
+IRVST                             00000005
+LCD_CLEAR1                        00000162
+LCD_CLEAR12                       00000168
+LCD_CLEAR2                        00000170
+LCD_CLEAR22                       00000176
+LCD_SEND                          00000124
+LCD_SEND_LOOP                     00000127
+LDEL_COUNT                        00000009
+LEADER_LOOP                       000001D7
+LEADER_OUT                        0000025E
+LEADER_OUT2                       00000276
+LEADER_WAIT                       00000260
+LEADER_WAIT2                      00000278
+LINE2_LCD                         00000155
+LISTEN                            0000006C
+LISTEN2                           00000074
+LOAD_STRING                       00000817
+LVDCON                            00000109
+LVDEN                             00000004
+LVDIE                             00000005
+MPASM  5.43                          MAIN.ASM   5-8-2020  18:39:39         PAGE 44
+
+
+SYMBOL TABLE
+  LABEL                             VALUE 
+
+LVDIF                             00000005
+LVDL0                             00000000
+LVDL1                             00000001
+LVDL2                             00000002
+LVDL3                             00000003
+MAIN                              0000003C
+MEM_CLEAR                         00000097
+MEM_CLEAR_LOOP                    0000009D
+MEM_DUMP                          000000A9
+MEM_DUMP_LOOP                     000000AD
+NAME_COPY                         000001CE
+NEXT_STRING                       00000837
+NOT_A                             00000005
+NOT_ADDRESS                       00000005
+NOT_BO                            00000000
+NOT_BOR                           00000000
+NOT_DONE                          00000002
+NOT_EOF_BLOCK                     0000020E
+NOT_PD                            00000003
+NOT_POR                           00000001
+NOT_RBPU                          00000007
+NOT_RC8                           00000006
+NOT_T1SYNC                        00000002
+NOT_TO                            00000004
+NOT_TX8                           00000006
+NOT_W                             00000002
+NOT_WRITE                         00000002
+OBF                               00000006
+OERR                              00000001
+OPTION_REG                        00000081
+OSCCON                            0000008F
+OSCTUNE                           00000090
+OSFIE                             00000007
+OSFIF                             00000007
+OSTS                              00000003
+P                                 00000004
+PCFG0                             00000000
+PCFG1                             00000001
+PCFG2                             00000002
+PCFG3                             00000003
+PCL                               00000002
+PCLATH                            0000000A
+PCON                              0000008E
+PEIE                              00000006
+PEN                               00000002
+PHASE1                            000002A4
+PHASE2                            000002AB
+PHASE2_NEXT                       000002B9
+PHASE3                            000002B3
+PHASE4                            000002B7
+PHASE_DONE                        000002C2
+PIE1                              0000008C
+PIE2                              0000008D
+MPASM  5.43                          MAIN.ASM   5-8-2020  18:39:39         PAGE 45
+
+
+SYMBOL TABLE
+  LABEL                             VALUE 
+
+PIR1                              0000000C
+PIR2                              0000000D
+PMADR                             0000010D
+PMADRH                            0000010F
+PMCON1                            0000018C
+PMDATA                            0000010C
+PMDATH                            0000010E
+PN_LOOP                           0000018F
+PORTA                             00000005
+PORTB                             00000006
+PORTC                             00000007
+PORTD                             00000008
+PORTE                             00000009
+PR2                               00000092
+PRINT_NAME                        00000189
+PRINT_STRING_LCD                  00000199
+PRINT_STRING_SERIAL               000001AB
+PRINT_TEST_DATA                   0000030B
+PS0                               00000000
+PS1                               00000001
+PS2                               00000002
+PSA                               00000003
+PSL2                              0000019B
+PSPIE                             00000007
+PSPIF                             00000007
+PSPMODE                           00000004
+PSS2                              000001AC
+PTD_INNER                         0000030D
+PTD_NO_NEWLINE                    00000314
+PTD_OUTER                         0000030C
+PULSE_E                           0000017E
+PULSE_LENGTH                      00000005
+R                                 00000002
+RA0                               00000000
+RA1                               00000001
+RA2                               00000002
+RA3                               00000003
+RA4                               00000004
+RA5                               00000005
+RA6                               00000006
+RA7                               00000007
+RAM_ADDRESS_H                     00000006
+RAM_ADDRESS_L                     00000007
+RAM_CONFIG                        00000110
+RAM_CONFIG_C                      00000116
+RAM_CONFIG_D                      0000011D
+RAM_READ                          000000C5
+RAM_READ_AUTO                     000000C2
+RAM_WAIT_AH                       000000CB
+RAM_WAIT_AL                       000000D3
+RAM_WAIT_D                        000000DA
+RAM_WAIT_R                        000000E1
+RAM_WRITE                         000000EC
+MPASM  5.43                          MAIN.ASM   5-8-2020  18:39:39         PAGE 46
+
+
+SYMBOL TABLE
+  LABEL                             VALUE 
+
+RAM_WRITE_AH                      000000F2
+RAM_WRITE_AL                      000000FA
+RAM_WRITE_AUTO                    000000E9
+RAM_WRITE_D                       00000102
+RAM_WRITE_R                       00000109
+RB0                               00000000
+RB1                               00000001
+RB2                               00000002
+RB3                               00000003
+RB4                               00000004
+RB5                               00000005
+RB6                               00000006
+RB7                               00000007
+RBIE                              00000003
+RBIF                              00000000
+RC0                               00000000
+RC1                               00000001
+RC2                               00000002
+RC3                               00000003
+RC4                               00000004
+RC5                               00000005
+RC6                               00000006
+RC7                               00000007
+RC8_9                             00000006
+RC9                               00000006
+RCD8                              00000000
+RCEN                              00000003
+RCIE                              00000005
+RCIF                              00000005
+RCREG                             0000001A
+RCSTA                             00000018
+RD                                00000000
+RD0                               00000000
+RD1                               00000001
+RD2                               00000002
+RD3                               00000003
+RD4                               00000004
+RD5                               00000005
+RD6                               00000006
+RD7                               00000007
+RE0                               00000000
+RE1                               00000001
+RE2                               00000002
+RE3                               00000003
+READ_WRITE                        00000002
+RECEIVE                           0000092E
+RP0                               00000005
+RP1                               00000006
+RSEN                              00000001
+RX9                               00000006
+RX9D                              00000000
+R_NOT_W                           00000002
+R_W                               00000002
+MPASM  5.43                          MAIN.ASM   5-8-2020  18:39:39         PAGE 47
+
+
+SYMBOL TABLE
+  LABEL                             VALUE 
+
+S                                 00000003
+SAVE_BLOCKS                       000001FF
+SAVE_FIRST_BLOCK                  000001EA
+SAVE_STRING                       0000081E
+SBOREN                            00000002
+SCS0                              00000000
+SCS1                              00000001
+SDEL_COUNT                        00000008
+SEN                               00000000
+SEND_232                          00000900
+SEND_STRING                       00000825
+SEND_TAPE                         00000082
+SETHOME_LCD                       0000014D
+SMP                               00000007
+SPBRG                             00000099
+SPEN                              00000007
+SPI_TRANSFER                      000002D1
+SPI_WAIT                          000002D5
+SREN                              00000005
+SSPADD                            00000093
+SSPBUF                            00000013
+SSPCON                            00000014
+SSPCON2                           00000091
+SSPEN                             00000005
+SSPIE                             00000003
+SSPIF                             00000003
+SSPM0                             00000000
+SSPM1                             00000001
+SSPM2                             00000002
+SSPM3                             00000003
+SSPOV                             00000006
+SSPSTAT                           00000094
+STATUS                            00000003
+STRING_ID                         00000033
+STRING_INDEX                      00000032
+STRING_TABLE                      00000800
+SWDTE                             00000000
+SWDTEN                            00000000
+SYNC                              00000004
+S_REG_HIGH                        0000002D
+S_REG_LOW                         0000002E
+T0CS                              00000005
+T0IE                              00000005
+T0IF                              00000002
+T0SE                              00000004
+T1CKPS0                           00000004
+T1CKPS1                           00000005
+T1CON                             00000010
+T1INSYNC                          00000002
+T1OSCEN                           00000003
+T1RUN                             00000006
+T1SYNC                            00000002
+T2CKPS0                           00000000
+MPASM  5.43                          MAIN.ASM   5-8-2020  18:39:39         PAGE 48
+
+
+SYMBOL TABLE
+  LABEL                             VALUE 
+
+T2CKPS1                           00000001
+T2CON                             00000012
+TAPE_DELAY                        0000024B
+TAPE_IN                           000001B8
+TAPE_INT                          0000028F
+TAPE_NAME                         00000010
+TAPE_NAMEBLOCK                    00000266
+TAPE_NE                           0000027C
+TAPE_OUT                          00000251
+TAPE_PAUSE                        000002C4
+TAPE_SIZE_HIGH                    00000018
+TAPE_SIZE_LOW                     00000019
+TAPE_W1                           00000267
+TAPE_W2                           00000269
+TAPE_W3                           0000027D
+TAPE_W4                           0000027F
+TEMP1                             00000001
+TEMP2                             00000002
+TEMP3                             00000003
+TEMP4                             00000004
+TIMEOUT_ERROR                     00000567
+TIMEOUT_HIGH                      00000030
+TIMEOUT_LOW                       0000002F
+TIMEOUT_STRING                    0000082C
+TMR0                              00000001
+TMR0IE                            00000005
+TMR0IF                            00000002
+TMR1CS                            00000001
+TMR1H                             0000000F
+TMR1IE                            00000000
+TMR1IF                            00000000
+TMR1L                             0000000E
+TMR1ON                            00000000
+TMR2                              00000011
+TMR2IE                            00000001
+TMR2IF                            00000001
+TMR2ON                            00000002
+TOUTPS0                           00000003
+TOUTPS1                           00000004
+TOUTPS2                           00000005
+TOUTPS3                           00000006
+TP1                               000002C6
+TP2                               000002C8
+TP3                               000002CA
+TRISA                             00000085
+TRISA0                            00000000
+TRISA1                            00000001
+TRISA2                            00000002
+TRISA3                            00000003
+TRISA4                            00000004
+TRISA5                            00000005
+TRISA6                            00000006
+TRISA7                            00000007
+MPASM  5.43                          MAIN.ASM   5-8-2020  18:39:39         PAGE 49
+
+
+SYMBOL TABLE
+  LABEL                             VALUE 
+
+TRISB                             00000086
+TRISB0                            00000000
+TRISB1                            00000001
+TRISB2                            00000002
+TRISB3                            00000003
+TRISB4                            00000004
+TRISB5                            00000005
+TRISB6                            00000006
+TRISB7                            00000007
+TRISC                             00000087
+TRISC0                            00000000
+TRISC1                            00000001
+TRISC2                            00000002
+TRISC3                            00000003
+TRISC4                            00000004
+TRISC5                            00000005
+TRISC6                            00000006
+TRISC7                            00000007
+TRISD                             00000088
+TRISD0                            00000000
+TRISD1                            00000001
+TRISD2                            00000002
+TRISD3                            00000003
+TRISD4                            00000004
+TRISD5                            00000005
+TRISD6                            00000006
+TRISD7                            00000007
+TRISE                             00000089
+TRISE0                            00000000
+TRISE1                            00000001
+TRISE2                            00000002
+TRISE3                            00000003
+TRMT                              00000001
+TUN0                              00000000
+TUN1                              00000001
+TUN2                              00000002
+TUN3                              00000003
+TUN4                              00000004
+TUN5                              00000005
+TX8_9                             00000006
+TX9                               00000006
+TX9D                              00000000
+TXD8                              00000000
+TXDELAY_232                       0000095C
+TXDELAY_2322                      0000095E
+TXEN                              00000005
+TXIE                              00000004
+TXIF                              00000004
+TXREG                             00000019
+TXSTA                             00000098
+UA                                00000001
+UART_READ                         000000B8
+UART_SEND                         000000BD
+MPASM  5.43                          MAIN.ASM   5-8-2020  18:39:39         PAGE 50
+
+
+SYMBOL TABLE
+  LABEL                             VALUE 
+
+UFR_DONE                          00000555
+UFR_GO                            0000054D
+UFR_LOOP                          00000541
+UFW_BREAK                         0000050B
+UFW_EQUAL                         00000524
+UFW_NB                            00000509
+UFW_ND_LOOP                       000004EB
+UFW_NE                            0000051B
+UFW_WR_LOOP                       000004FC
+URD_LOOP                          0000038D
+USB_BYTES_READ_HIGH               00000021
+USB_BYTES_READ_LOW                00000022
+USB_BYTES_SENT_HIGH               0000001D
+USB_BYTES_SENT_LOW                0000001E
+USB_BYTE_READ                     00000370
+USB_BYTE_READ_GO                  0000037C
+USB_BYTE_WRITE                    000003BC
+USB_BYTE_WR_GO                    000003C8
+USB_CHECK_EXISTS                  000003A9
+USB_DISK_CAPACITY                 00000415
+USB_DISK_CONNECT                  000003DC
+USB_DISK_MOUNT                    000003D6
+USB_DISK_QUERY                    0000043A
+USB_DRIVE_SIZE1                   00000023
+USB_DRIVE_SIZE2                   00000024
+USB_DRIVE_SIZE3                   00000025
+USB_FILE_CLOSE                    00000367
+USB_FILE_CREATE                   000003B6
+USB_FILE_OPEN                     00000361
+USB_FILE_READ                     00000535
+USB_FILE_SIZE_HIGH                0000001F
+USB_FILE_SIZE_LOW                 00000020
+USB_FILE_WRITE                    000004CE
+USB_FREE_SPACE1                   00000026
+USB_FREE_SPACE2                   00000027
+USB_FREE_SPACE3                   00000028
+USB_GET_FILE_SIZE                 00000394
+USB_GET_STATUS                    000003CE
+USB_GET_VERSION                   000003FD
+USB_LOGICAL_BYTES1                00000029
+USB_LOGICAL_BYTES2                0000002A
+USB_LOGICAL_BYTES3                0000002B
+USB_READ_DATA0                    00000382
+USB_RESET_ALL                     00000345
+USB_SET_FILE_NAME                 0000034B
+USB_SET_MODE_5                    000003E2
+USB_SET_MODE_6                    000003EB
+USB_SET_MODE_7                    000003F4
+USB_TARGET_STATUS                 0000002C
+USB_WAIT_STATUS                   00000405
+USB_WRITE_TEST_DATA               00000471
+USFN_LOOP                         00000357
+UWS_LOOP                          00000407
+MPASM  5.43                          MAIN.ASM   5-8-2020  18:39:39         PAGE 51
+
+
+SYMBOL TABLE
+  LABEL                             VALUE 
+
+UWTD_BREAK                        000004A2
+UWTD_EQUAL                        000004BB
+UWTD_L4                           0000047E
+UWTD_NB                           000004A0
+UWTD_ND_LOOP                      0000048B
+UWTD_NE                           000004B2
+UWTD_WR_LOOP                      00000493
+VCFG0                             00000004
+VCFG1                             00000005
+W                                 00000000
+WAIT_232                          0000092F
+WAIT_START                        00000229
+WAIT_STOP                         0000022E
+WCOL                              00000007
+WDTCON                            00000105
+WDTPS0                            00000001
+WDTPS1                            00000002
+WDTPS2                            00000003
+WDTPS3                            00000004
+Z                                 00000002
+_BOREN_0                          00003FBF
+_BOREN_1                          00003FFF
+_BOREN_OFF                        00003FBF
+_BOREN_ON                         00003FFF
+_BORSEN_0                         00003FBF
+_BORSEN_1                         00003FFF
+_BORSEN_OFF                       00003FBF
+_BORSEN_ON                        00003FFF
+_BORV_20                          00003FFF
+_BORV_27                          00003F7F
+_BORV_42                          00003EFF
+_BORV_45                          00003E7F
+_CCP2MX_RB3                       00002FFF
+_CCP2MX_RC1                       00003FFF
+_CCP2_RB3                         00002FFF
+_CCP2_RC1                         00003FFF
+_CONFIG1                          00002007
+_CONFIG2                          00002008
+_CP_ALL                           00001FFF
+_CP_OFF                           00003FFF
+_CP_ON                            00001FFF
+_DEBUG_OFF                        00003FFF
+_DEBUG_ON                         000037FF
+_DEVID1                           00002006
+_EXTCLK                           00003FEF
+_EXTRC_CLKOUT                     00003FFF
+_EXTRC_IO                         00003FFE
+_FCMEN_OFF                        00003FFE
+_FCMEN_ON                         00003FFF
+_FOSC_EC                          00003FEF
+_FOSC_EXTRCCLK                    00003FFF
+_FOSC_EXTRCIO                     00003FFE
+_FOSC_HS                          00003FEE
+MPASM  5.43                          MAIN.ASM   5-8-2020  18:39:39         PAGE 52
+
+
+SYMBOL TABLE
+  LABEL                             VALUE 
+
+_FOSC_INTOSCCLK                   00003FFD
+_FOSC_INTOSCIO                    00003FFC
+_FOSC_LP                          00003FEC
+_FOSC_XT                          00003FED
+_HS_OSC                           00003FEE
+_IDLOC0                           00002000
+_IDLOC1                           00002001
+_IDLOC2                           00002002
+_IDLOC3                           00002003
+_IESO_OFF                         00003FFD
+_IESO_ON                          00003FFF
+_INTRC_CLKOUT                     00003FFD
+_INTRC_IO                         00003FFC
+_LP_OSC                           00003FEC
+_MCLRE_OFF                        00003FDF
+_MCLRE_ON                         00003FFF
+_MCLR_OFF                         00003FDF
+_MCLR_ON                          00003FFF
+_PWRTE_OFF                        00003FFF
+_PWRTE_ON                         00003FF7
+_VBOR_2_0                         00003FFF
+_VBOR_2_7                         00003F7F
+_VBOR_4_2                         00003EFF
+_VBOR_4_5                         00003E7F
+_WDTE_OFF                         00003FFB
+_WDTE_ON                          00003FFF
+_WDT_OFF                          00003FFB
+_WDT_ON                           00003FFF
+_XT_OSC                           00003FED
+__16F747                          00000001
+
+Errors   :     0
+Warnings :     0 reported,     0 suppressed
+Messages :    21 reported,     0 suppressed
+
+
